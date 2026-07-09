@@ -1,10 +1,10 @@
 package io.osrsx.plugins.agility
 
 import io.osrsx.api.profile
-import io.osrsx.plugin.HasOverlay
+import io.osrsx.plugin.Gfx2D
+import io.osrsx.plugin.HasPanel
 import io.osrsx.plugin.PluginDescriptor
 import io.osrsx.plugin.RoutinePlugin
-import io.osrsx.plugin.ScriptGui
 import io.osrsx.plugin.routine
 
 /**
@@ -26,7 +26,7 @@ import io.osrsx.plugin.routine
     author = "osrsx",
     tags = ["skilling", "agility"],
 )
-class AgilityPlugin : RoutinePlugin(), HasOverlay {
+class AgilityPlugin : RoutinePlugin(), HasPanel {
 
     override fun config() = Config
 
@@ -65,14 +65,14 @@ class AgilityPlugin : RoutinePlugin(), HasOverlay {
 
     override fun routine() = core
 
-    override fun overlayTitle() = "Agility"
-
-    override fun onOverlay(gui: ScriptGui) = profile("agility/overlay") {
+    override fun onPanel(gfx: Gfx2D) = profile("agility/overlay") {
         val target = currentCourse()?.display ?: "—"
-        AgilityOverlay.render(gui, stats, listOf(
-            "Course" to target,
-            "Laps" to stats.laps().toString(),
-            "Marks" to stats.marks().toString(),
-        ))
+        gfx.overlay("Agility") { g ->
+            AgilityOverlay.render(g, stats, listOf(
+                "Course" to target,
+                "Laps" to stats.laps().toString(),
+                "Marks" to stats.marks().toString(),
+            ))
+        }
     }
 }
