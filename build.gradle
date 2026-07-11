@@ -2,6 +2,7 @@ apply plugin: 'io.osrsx.plugin'
 
 osrsxPlugin {
     id = 'agility'
+    main = 'io.osrsx.plugins.agility.AgilityPlugin'
     group = 'io.osrsx.plugins'
     version = '1.0.0'
     name = 'Agility'

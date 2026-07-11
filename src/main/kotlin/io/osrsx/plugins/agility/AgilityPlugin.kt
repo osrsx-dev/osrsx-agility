@@ -2,7 +2,6 @@ package io.osrsx.plugins.agility
 
 import io.osrsx.api.profile
 import io.osrsx.plugin.HasOverlay
-import io.osrsx.plugin.PluginDescriptor
 import io.osrsx.plugin.RoutinePlugin
 import io.osrsx.plugin.ScriptGui
 import io.osrsx.plugin.routine
@@ -20,12 +19,6 @@ import io.osrsx.plugin.routine
  * Built the same way as the miner/smither: a single [RoutinePlugin] whose core routine owns the shared
  * prologue (login/break/idle/run) and delegates each tick to the [CourseRunner] sub-routine.
  */
-@PluginDescriptor(
-    name = "Agility",
-    description = "Runs a rooftop Agility course: traverses obstacles, grabs Marks of Grace, manages run energy.",
-    author = "osrsx",
-    tags = ["skilling", "agility"],
-)
 class AgilityPlugin : RoutinePlugin(), HasOverlay {
 
     override fun config() = Config
