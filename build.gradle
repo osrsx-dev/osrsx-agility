@@ -4,7 +4,7 @@ osrsxPlugin {
     id = 'agility'
     main = 'io.osrsx.plugins.agility.AgilityPlugin'
     group = 'io.osrsx.plugins'
-    version = '1.0.1'
+    version = '1.1.0'
     name = 'Agility'
     description = 'Runs a rooftop Agility course: web-walks to the course, traverses every obstacle, picks up Marks of Grace and manages run energy.'
     authors = ['osrsx']
