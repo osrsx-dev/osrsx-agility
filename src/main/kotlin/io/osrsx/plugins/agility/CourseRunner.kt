@@ -11,7 +11,7 @@ import io.osrsx.script.stagedScript
 
 /**
  * The engine that actually runs a rooftop course, as a guard-less staged ladder ([StagedScript]) nested under
- * the plugin's core script (which owns the login/break/idle prologue) — the agility analogue of [NormalMiner].
+ * the plugin's core script (which owns the login/idle prologue) — the agility analogue of [NormalMiner].
  *
  * ## Finding obstacles without a hardcoded script
  *

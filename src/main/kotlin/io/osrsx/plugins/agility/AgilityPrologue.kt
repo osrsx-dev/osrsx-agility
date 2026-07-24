@@ -1,6 +1,5 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.platform.BreakManager
 import io.osrsx.api.PluginContext
 import io.osrsx.api.scene.SceneEntity
 import io.osrsx.api.get
@@ -14,9 +13,9 @@ import io.osrsx.util.Rng
  *
  * Guard stages are declared first, so they outrank the domain [io.osrsx.script.stagedScript] ladder
  * (first match wins) and the [CourseRunner] substage's side-effecting sense (the object/ground-item
- * queries that resolve the next obstacle and nearby marks) never fires while logged out or on a break:
+ * queries that resolve the next obstacle and nearby marks) never fires while logged out:
  *
- *   login → coordination-yield → break → auto-dialogue → antiban-idle
+ *   login → coordination-yield → auto-dialogue → antiban-idle
  *
  * The old "stopping" guard is the script's completion condition now — [StagedScriptBuilder.isComplete]
  * fires on a met stop target and the plugin disables itself via the script-done contract.
@@ -55,10 +54,6 @@ fun StagedScriptBuilder<Unit>.agilityPrologue(
         park(1500)
     }
     stage("yielding", { ctx.coordination().shouldYield() }) { status("yielding"); park(Rng.uniform(1200, 2000)) }
-    stage("break", { ctx.services().get<BreakManager>()?.onBreak() == true }) {
-        status("break")
-        park(Rng.uniform(2000, 5000))
-    }
     stage("dialogue", { ctx.dialogues().inDialogue() }) {
         status("dialogue")
         act("dialogue") { ctx.dialogues().continueAuto() }

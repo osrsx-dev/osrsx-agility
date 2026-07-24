@@ -16,7 +16,7 @@ import io.osrsx.script.stagedScript
  * level, XP/hr, laps and marks.
  *
  * Built the same way as the miner/smither: a single [ScriptPlugin] whose core staged script owns the shared
- * prologue (login/break/idle/run) and delegates each pass to the [CourseRunner] substage.
+ * prologue (login/idle/run) and delegates each pass to the [CourseRunner] substage.
  */
 class AgilityPlugin : ScriptPlugin() {
 
@@ -43,7 +43,7 @@ class AgilityPlugin : ScriptPlugin() {
 
     /**
      * The plugin's single **core** staged script — the whole loop. It owns the shared prologue (login/yield/
-     * break/dialogue/idle guard stages + the stop-target completion + input-lock/run upkeep via
+     * dialogue/idle guard stages + the stop-target completion + input-lock/run upkeep via
      * [agilityPrologue]), its own start/stop lifecycle, and delegates each pass to the [CourseRunner]
      * substage. The [ScriptPlugin] base pumps it on the client tick — stage/gate predicates read live state
      * directly (no snapshot layer, no hops) and blocking actions route through `act { }` to the actuator
