@@ -56,6 +56,11 @@ class CourseRunner(
     // between the walk-to and the obstacle animation still reads as "busy".
     private val gate = IdleGate(ctx, defaultDebounceMs = 1000L)
 
+    // Live-tunable pacing (Config → Pacing section): the post-click settle vs the general between-pass
+    // beat. Ranges are humanized via [snap] (short-biased) and still scaled by the Speed percent.
+    private fun clickSnap() = snap(Config.clickDelayMin, maxOf(Config.clickDelayMax, Config.clickDelayMin))
+    private fun beatSnap() = snap(Config.beatMin, maxOf(Config.beatMax, Config.beatMin))
+
     // ---- learned course state (reset when the selected course changes) ----
     private var courseId: String? = null
     private val ring = mutableListOf<Tile>()
@@ -98,7 +103,7 @@ class CourseRunner(
         if (c?.id != courseId) resetFor(c)
 
         val me = ctx.players().localPlayer()?.tile()
-        val busy = gate.stillBusy()
+        val busy = gate.stillBusy(Config.idleDebounce.toLong())
         updateLap(me, c)
         checkStuck(me)
 
@@ -163,9 +168,9 @@ class CourseRunner(
 
     /** The main per-pass driver: perform the committed obstacle, or pick the next one. */
     private suspend fun ScriptScope.drive(me: Tile?, busy: Boolean): Long {
-        if (me == null) return snap(300, 700)
+        if (me == null) return beatSnap()
         // A busy period AFTER we clicked is the obstacle's walk-to + traversal animation.
-        if (busy) { if (interacted) sawBusy = true; stats.status = "traversing"; return snap(250, 700) }
+        if (busy) { if (interacted) sawBusy = true; stats.status = "traversing"; return beatSnap() }
 
         // After a fall, walk all the way back to the start before touching any obstacle again.
         if (recovering) {
@@ -178,7 +183,7 @@ class CourseRunner(
 
         val t = selectTarget(me)
         if (t == null) {
-            return if (me.plane == 0) walkToCourse() else { stats.status = "waiting"; snap(400, 1000) }
+            return if (me.plane == 0) walkToCourse() else { stats.status = "waiting"; beatSnap() }
         }
         committed = t; interacted = false; sawBusy = false
         return snap(40, 90) // act on the new commitment next tick
@@ -191,15 +196,15 @@ class CourseRunner(
         if (obj == null) {
             // Obstacle left the scene: if we'd already clicked it, we traversed past it → it's done.
             if (interacted) completeObstacle(c, me) else committed = null
-            return@section snap(150, 400)
+            return@section beatSnap()
         }
 
         if (interacted) {
             // We reach here only when NOT busy. A completed busy cycle means the traversal happened.
-            if (sawBusy) { completeObstacle(c, me); return@section snap(150, 450) }
+            if (sawBusy) { completeObstacle(c, me); return@section beatSnap() }
             // Clicked but nothing ever moved → a no-op from the wrong side; cool it down and re-pick.
-            if (now - clickMs > STUCK_MS) { cooldown[c.tile] = now + COOLDOWN_MS; committed = null; return@section snap(150, 450) }
-            return@section snap(250, 600) // just clicked; give it a beat to start
+            if (now - clickMs > STUCK_MS) { cooldown[c.tile] = now + COOLDOWN_MS; committed = null; return@section beatSnap() }
+            return@section clickSnap() // just clicked; give it a beat to start
         }
 
         // Interact as soon as the obstacle is on-screen — `interact` auto-walks to the correct interaction
@@ -210,12 +215,12 @@ class CourseRunner(
             stats.status = "traversing"
             act("obstacle") { if (!obj.leftClickIfDefault(c.action)) obj.interact(c.action) }
             interacted = true; clickMs = now; sawBusy = false
-            return@section snap(300, 700)
+            return@section clickSnap()
         }
         stats.status = "approaching"
         act("rotate") { ctx.camera().rotateToObject(obj) }
         if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) act("walk-step") { ctx.walker().local.walkStep(c.tile) }
-        snap(300, 800)
+        beatSnap()
     }
 
     /**
@@ -250,7 +255,7 @@ class CourseRunner(
     private suspend fun ScriptScope.grabMark(mark: GroundItem): Long = ctx.profiler().section("agility/mark") {
         stats.status = "grabbing mark"
         if (act("take-mark") { mark.interact("Take") }) stats.addMark()
-        snap(400, 900)
+        beatSnap()
     }
 
     private suspend fun ScriptScope.walkToCourse(): Long = ctx.profiler().section("agility/walk") {

@@ -59,12 +59,11 @@ fun StagedScriptBuilder<Unit>.agilityPrologue(
         act("dialogue") { ctx.dialogues().continueAuto() }
         park(Rng.uniform(600, 1000))
     }
-    stage("idle", { Rng.chance(IDLE_CHANCE) }) { status("idle"); park(Rng.uniform(IDLE_MIN_MS, IDLE_MAX_MS)) }
+    stage("idle", { Config.idleChance > 0 && Rng.chance(Config.idleChance / 100.0) }) {
+        status("idle")
+        park(Rng.uniform(Config.idleMin.toLong(), maxOf(Config.idleMax, Config.idleMin).toLong()))
+    }
 }
-
-private const val IDLE_CHANCE = 0.03
-private const val IDLE_MIN_MS = 1500L
-private const val IDLE_MAX_MS = 4000L
 
 /**
  * Debounced "still traversing" gate (the agility twin of the miner's `IdleGate`): an obstacle traversal is a
