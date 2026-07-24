@@ -1,10 +1,9 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.profile
+import io.osrsx.api.platform.profile
 import io.osrsx.plugin.Gfx2D
-import io.osrsx.plugin.HasPanel
-import io.osrsx.plugin.RoutinePlugin
-import io.osrsx.plugin.routine
+import io.osrsx.script.ScriptPlugin
+import io.osrsx.script.stagedScript
 
 /**
  * Rooftop Agility runner. Pick a **course** (or "Auto — best for level"); the plugin web-walks to it and runs
@@ -16,12 +15,12 @@ import io.osrsx.plugin.routine
  * profiled under `agility/…` spans (zero-overhead when profiling is off), and a live stats overlay shows
  * level, XP/hr, laps and marks.
  *
- * Built the same way as the miner/smither: a single [RoutinePlugin] whose core routine owns the shared
- * prologue (login/break/idle/run) and delegates each tick to the [CourseRunner] sub-routine.
+ * Built the same way as the miner/smither: a single [ScriptPlugin] whose core staged script owns the shared
+ * prologue (login/idle/run) and delegates each pass to the [CourseRunner] substage.
  */
-class AgilityPlugin : RoutinePlugin(), HasPanel {
+class AgilityPlugin : ScriptPlugin() {
 
-    override fun config() = Config
+    override fun settings() = Config
 
     private val stats by lazy { AgilityStats(ctx) }
 
@@ -43,20 +42,24 @@ class AgilityPlugin : RoutinePlugin(), HasPanel {
     }
 
     /**
-     * The plugin's single **core** routine — the whole loop. It owns the shared prologue (login/yield/stop/
-     * break/dialogue/idle guards + input-lock/run upkeep via [agilityPrologue]), its own start/stop lifecycle,
-     * and delegates each tick to the [CourseRunner]. The [RoutinePlugin] base drives start/loop/stop.
+     * The plugin's single **core** staged script — the whole loop. It owns the shared prologue (login/yield/
+     * dialogue/idle guard stages + the stop-target completion + input-lock/run upkeep via
+     * [agilityPrologue]), its own start/stop lifecycle, and delegates each pass to the [CourseRunner]
+     * substage. The [ScriptPlugin] base pumps it on the client tick — stage/gate predicates read live state
+     * directly (no snapshot layer, no hops) and blocking actions route through `act { }` to the actuator
+     * drain thread. Stage delays ([io.osrsx.script.ScriptScope.park]) pace as before.
      */
     private val core by lazy {
-        routine(ctx.profiler(), "agility", status = { stats.status = it }) {
-            agilityPrologue(ctx, { Config.lockInput }, { stops.reason() })
+        stagedScript<Unit>("agility") {
+            readState { }
+            agilityPrologue(ctx, { Config.lockInput }, { stops.reason() }, status = { stats.status = it })
             onStart { stats.start() }
             onStop { if (ctx.input().isLocked()) ctx.input().unlock() }
-            subroutine("run", { true }, runner.routine)
+            substage("run", { true }, runner.staged)
         }
     }
 
-    override fun routine() = core
+    override fun script() = core.toScript()
 
     override fun onPanel(gfx: Gfx2D) = profile("agility/overlay") {
         val target = currentCourse()?.display ?: "—"

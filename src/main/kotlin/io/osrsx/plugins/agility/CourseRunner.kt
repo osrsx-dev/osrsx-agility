@@ -1,16 +1,17 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.GroundItem
+import io.osrsx.api.scene.GroundItem
 import io.osrsx.api.PluginContext
-import io.osrsx.api.SceneObject
-import io.osrsx.api.Tile
-import io.osrsx.api.section
-import io.osrsx.plugin.Routine
-import io.osrsx.plugin.routine
+import io.osrsx.api.scene.SceneObject
+import io.osrsx.api.scene.Tile
+import io.osrsx.api.platform.section
+import io.osrsx.script.ScriptScope
+import io.osrsx.script.StagedScript
+import io.osrsx.script.stagedScript
 
 /**
- * The engine that actually runs a rooftop course, as a guard-less step-based [Routine] nested under the
- * plugin's core routine (which owns the login/break/idle prologue) — the agility analogue of [NormalMiner].
+ * The engine that actually runs a rooftop course, as a guard-less staged ladder ([StagedScript]) nested under
+ * the plugin's core script (which owns the login/idle prologue) — the agility analogue of [NormalMiner].
  *
  * ## Finding obstacles without a hardcoded script
  *
@@ -48,12 +49,17 @@ class CourseRunner(
     /** One obstacle resolved in the live scene: the [obj] to click, its unique [tile] key, and the [action]. */
     private data class Target(val obj: SceneObject, val tile: Tile, val action: String)
 
-    /** One coherent read per tick, shared by every step (see [io.osrsx.plugin.Routine]). */
+    /** One coherent read per pass, shared by every stage (see [StagedScript]). */
     private data class Snap(val me: Tile?, val busy: Boolean, val mark: GroundItem?)
 
     // Obstacle traversals are long animations with brief idle dips at the ends; debounce generously so a dip
     // between the walk-to and the obstacle animation still reads as "busy".
     private val gate = IdleGate(ctx, defaultDebounceMs = 1000L)
+
+    // Live-tunable pacing (Config → Pacing section): the post-click settle vs the general between-pass
+    // beat. Ranges are humanized via [snap] (short-biased) and still scaled by the Speed percent.
+    private fun clickSnap() = snap(Config.clickDelayMin, maxOf(Config.clickDelayMax, Config.clickDelayMin))
+    private fun beatSnap() = snap(Config.beatMin, maxOf(Config.beatMax, Config.beatMin))
 
     // ---- learned course state (reset when the selected course changes) ----
     private var courseId: String? = null
@@ -80,14 +86,15 @@ class CourseRunner(
     private var lastLanding: Tile? = null
     private var prevLanding: Tile? = null
 
-    val routine: Routine<*> = routine<Snap>(
-        profiler = ctx.profiler(),
-        spanPrefix = "agility",
-        status = { stats.status = it },
-        sense = { sense() },
-    ) {
-        step("picking up mark", { !busy && mark != null && committed == null }) { grabMark(mark!!) }
-        step("advancing", { true }) { drive(me, busy) }
+    /** The pass's coherent snapshot — written by readState for the stage BODIES to share (stage
+     *  predicates receive the state, bodies don't). */
+    private var sensed = Snap(null, false, null)
+
+    val staged: StagedScript<*> = stagedScript<Snap>("agility") {
+        readState { sense().also { sensed = it } }
+        isComplete { false } // cyclic — the plugin's outer gate (stop targets) decides
+        stage("picking up mark", { !it.busy && it.mark != null && committed == null }) { park(grabMark(sensed.mark!!)) }
+        stage("advancing", { true }) { stats.status = "advancing"; park(drive(sensed.me, sensed.busy)) }
     }
 
     private fun sense(): Snap = ctx.profiler().section("agility/sense") {
@@ -96,7 +103,7 @@ class CourseRunner(
         if (c?.id != courseId) resetFor(c)
 
         val me = ctx.players().localPlayer()?.tile()
-        val busy = gate.stillBusy()
+        val busy = gate.stillBusy(Config.idleDebounce.toLong())
         updateLap(me, c)
         checkStuck(me)
 
@@ -159,11 +166,11 @@ class CourseRunner(
         if (learning) { ring.clear(); lapVisited.clear() }
     }
 
-    /** The main per-tick driver: perform the committed obstacle, or pick the next one. */
-    private fun drive(me: Tile?, busy: Boolean): Long {
-        if (me == null) return snap(300, 700)
+    /** The main per-pass driver: perform the committed obstacle, or pick the next one. */
+    private suspend fun ScriptScope.drive(me: Tile?, busy: Boolean): Long {
+        if (me == null) return beatSnap()
         // A busy period AFTER we clicked is the obstacle's walk-to + traversal animation.
-        if (busy) { if (interacted) sawBusy = true; stats.status = "traversing"; return snap(250, 700) }
+        if (busy) { if (interacted) sawBusy = true; stats.status = "traversing"; return beatSnap() }
 
         // After a fall, walk all the way back to the start before touching any obstacle again.
         if (recovering) {
@@ -176,28 +183,33 @@ class CourseRunner(
 
         val t = selectTarget(me)
         if (t == null) {
-            return if (me.plane == 0) walkToCourse() else { stats.status = "waiting"; snap(400, 1000) }
+            return if (me.plane == 0) walkToCourse() else { stats.status = "waiting"; beatSnap() }
         }
         committed = t; interacted = false; sawBusy = false
         return snap(40, 90) // act on the new commitment next tick
     }
 
     /** Drive the obstacle we're committed to: approach → click → wait for the traversal to complete. */
-    private fun driveCommitted(c: Target, me: Tile): Long = ctx.profiler().section("agility/obstacle") {
+    private suspend fun ScriptScope.driveCommitted(c: Target, me: Tile): Long = ctx.profiler().section("agility/obstacle") {
+        // The walk TO the course is over the moment we're engaging the course itself. A still-driving
+        // global route (its dest is on plane 0, so it can never 'arrive' while we're on the rooftops)
+        // keeps clicking ground tiles all lap — lease contention that stretched obstacle gaps to 5-10s
+        // (seen live). stop() is a cheap cancellation; the SDK leaves navigator stops unwrapped.
+        if (ctx.walker().global.isNavigating()) ctx.walker().global.stop()
         val now = System.currentTimeMillis()
         val obj = objAt(c.tile)
         if (obj == null) {
             // Obstacle left the scene: if we'd already clicked it, we traversed past it → it's done.
             if (interacted) completeObstacle(c, me) else committed = null
-            return@section snap(150, 400)
+            return@section beatSnap()
         }
 
         if (interacted) {
             // We reach here only when NOT busy. A completed busy cycle means the traversal happened.
-            if (sawBusy) { completeObstacle(c, me); return@section snap(150, 450) }
+            if (sawBusy) { completeObstacle(c, me); return@section beatSnap() }
             // Clicked but nothing ever moved → a no-op from the wrong side; cool it down and re-pick.
-            if (now - clickMs > STUCK_MS) { cooldown[c.tile] = now + COOLDOWN_MS; committed = null; return@section snap(150, 450) }
-            return@section snap(250, 600) // just clicked; give it a beat to start
+            if (now - clickMs > STUCK_MS) { cooldown[c.tile] = now + COOLDOWN_MS; committed = null; return@section beatSnap() }
+            return@section clickSnap() // just clicked; give it a beat to start
         }
 
         // Interact as soon as the obstacle is on-screen — `interact` auto-walks to the correct interaction
@@ -206,14 +218,14 @@ class CourseRunner(
         // obstacle's own tile, which for a wall/beam is the no-op position where the action does nothing.
         if (obj.clickbox() != null) {
             stats.status = "traversing"
-            if (!obj.leftClickIfDefault(c.action)) obj.interact(c.action)
+            act("obstacle") { if (!obj.leftClickIfDefault(c.action)) obj.interact(c.action) }
             interacted = true; clickMs = now; sawBusy = false
-            return@section snap(300, 700)
+            return@section clickSnap()
         }
         stats.status = "approaching"
-        ctx.camera().rotateToObject(obj)
-        if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) ctx.walking().walkStep(c.tile)
-        snap(300, 800)
+        act("rotate") { ctx.camera().rotateToObject(obj) }
+        if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) act("walk-step") { ctx.walker().local.walkStep(c.tile) }
+        beatSnap()
     }
 
     /**
@@ -245,13 +257,13 @@ class CourseRunner(
         prev = t.tile
     }
 
-    private fun grabMark(mark: GroundItem): Long = ctx.profiler().section("agility/mark") {
+    private suspend fun ScriptScope.grabMark(mark: GroundItem): Long = ctx.profiler().section("agility/mark") {
         stats.status = "grabbing mark"
-        if (mark.interact("Take")) stats.addMark()
-        snap(400, 900)
+        if (act("take-mark") { mark.interact("Take") }) stats.addMark()
+        beatSnap()
     }
 
-    private fun walkToCourse(): Long = ctx.profiler().section("agility/walk") {
+    private suspend fun ScriptScope.walkToCourse(): Long = ctx.profiler().section("agility/walk") {
         val start = course()?.start ?: return@section snap(800, 1600)
         val me = ctx.players().localPlayer()?.tile()
         // Stop just short of the start rather than stepping onto it — the start tile is usually the first
@@ -260,7 +272,9 @@ class CourseRunner(
             return@section snap(300, 700)
         }
         stats.status = "walking"
-        ctx.webWalking().walkTo(start)
+        // Fire ONCE and poll: the walker is self-driving, and re-calling pathTo every pass displaces the
+        // incumbent route and re-runs a whole global search per beat.
+        if (!ctx.walker().global.isNavigating()) act("path-to-course") { ctx.walker().global.pathTo(start) }
         // Poll the walker on a short interval (like the standalone walker's ~150ms cadence) rather than a long
         // loop delay — otherwise travel to the course is noticeably slower than a plain web-walk.
         snap(120, 320)
@@ -326,7 +340,7 @@ class CourseRunner(
     private fun nearestMark(me: Tile): GroundItem? =
         ctx.groundItems().query().within(MARK_RADIUS).list()
             .filter { it.name()?.equals(MARK_OF_GRACE, ignoreCase = true) == true }
-            .filter { g -> g.tile()?.let { it.plane == me.plane && ctx.walking().canReachToInteract(it) } == true }
+            .filter { g -> g.tile()?.let { it.plane == me.plane && ctx.terrain().canReachToInteract(it) } == true }
             .minByOrNull { me.distanceTo(it.tile() ?: me) }
 
     private companion object {

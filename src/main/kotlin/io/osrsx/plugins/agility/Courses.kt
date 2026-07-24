@@ -1,8 +1,8 @@
 package io.osrsx.plugins.agility
 
 import io.osrsx.api.PluginContext
-import io.osrsx.api.Skill
-import io.osrsx.api.Tile
+import io.osrsx.api.player.Skill
+import io.osrsx.api.scene.Tile
 
 /**
  * The catalogue of rooftop Agility courses the [AgilityPlugin] can run, and the live account checks that
