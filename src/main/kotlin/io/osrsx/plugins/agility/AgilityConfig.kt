@@ -1,6 +1,6 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.config.PluginConfig
+import io.osrsx.plugin.PluginSettings
 
 /**
  * The agility plugin's user-facing configuration.
@@ -9,7 +9,7 @@ import io.osrsx.config.PluginConfig
  * from behaviour; [AgilityPlugin] references it as `Config` and hands it back from `config()`. The Course
  * dropdown is filled live from [Courses.optionsFor], so it only ever shows courses the account qualifies for.
  */
-object Config : PluginConfig("agility") {
+object Config : PluginSettings("agility") {
 
     var course by enumItem(
         "course", "Course",

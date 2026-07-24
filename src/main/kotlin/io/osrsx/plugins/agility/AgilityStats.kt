@@ -1,7 +1,7 @@
 package io.osrsx.plugins.agility
 
 import io.osrsx.api.PluginContext
-import io.osrsx.api.Skill
+import io.osrsx.api.player.Skill
 import io.osrsx.plugin.Gfx2D
 import java.util.concurrent.ThreadLocalRandom
 

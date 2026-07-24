@@ -1,7 +1,7 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.Skill
-import io.osrsx.api.WorldInfo
+import io.osrsx.api.player.Skill
+import io.osrsx.api.platform.WorldInfo
 import io.osrsx.testkit.TestContext
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.whenever

@@ -1,6 +1,6 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.profile
+import io.osrsx.api.platform.profile
 import io.osrsx.plugin.Gfx2D
 import io.osrsx.plugin.HasPanel
 import io.osrsx.plugin.RoutinePlugin
@@ -21,7 +21,7 @@ import io.osrsx.plugin.routine
  */
 class AgilityPlugin : RoutinePlugin(), HasPanel {
 
-    override fun config() = Config
+    override fun settings() = Config
 
     private val stats by lazy { AgilityStats(ctx) }
 

@@ -1,10 +1,10 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.GroundItem
+import io.osrsx.api.scene.GroundItem
 import io.osrsx.api.PluginContext
-import io.osrsx.api.SceneObject
-import io.osrsx.api.Tile
-import io.osrsx.api.section
+import io.osrsx.api.scene.SceneObject
+import io.osrsx.api.scene.Tile
+import io.osrsx.api.platform.section
 import io.osrsx.plugin.Routine
 import io.osrsx.plugin.routine
 
@@ -212,7 +212,7 @@ class CourseRunner(
         }
         stats.status = "approaching"
         ctx.camera().rotateToObject(obj)
-        if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) ctx.walking().walkStep(c.tile)
+        if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) ctx.walker().local.walkStep(c.tile)
         snap(300, 800)
     }
 
@@ -260,7 +260,7 @@ class CourseRunner(
             return@section snap(300, 700)
         }
         stats.status = "walking"
-        ctx.webWalking().walkTo(start)
+        ctx.walker().global.pathTo(start)
         // Poll the walker on a short interval (like the standalone walker's ~150ms cadence) rather than a long
         // loop delay — otherwise travel to the course is noticeably slower than a plain web-walk.
         snap(120, 320)
@@ -326,7 +326,7 @@ class CourseRunner(
     private fun nearestMark(me: Tile): GroundItem? =
         ctx.groundItems().query().within(MARK_RADIUS).list()
             .filter { it.name()?.equals(MARK_OF_GRACE, ignoreCase = true) == true }
-            .filter { g -> g.tile()?.let { it.plane == me.plane && ctx.walking().canReachToInteract(it) } == true }
+            .filter { g -> g.tile()?.let { it.plane == me.plane && ctx.terrain().canReachToInteract(it) } == true }
             .minByOrNull { me.distanceTo(it.tile() ?: me) }
 
     private companion object {

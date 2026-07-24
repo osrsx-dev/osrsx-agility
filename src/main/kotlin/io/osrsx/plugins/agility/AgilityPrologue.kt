@@ -1,8 +1,8 @@
 package io.osrsx.plugins.agility
 
-import io.osrsx.api.BreakManager
+import io.osrsx.api.platform.BreakManager
 import io.osrsx.api.PluginContext
-import io.osrsx.api.SceneEntity
+import io.osrsx.api.scene.SceneEntity
 import io.osrsx.api.get
 import io.osrsx.plugin.Plugin
 import io.osrsx.plugin.PluginLog
@@ -32,7 +32,7 @@ fun <C> RoutineBuilder<C>.agilityPrologue(
             val want = lockInput()
             if (want && !ctx.input().isLocked()) ctx.input().lock()
             else if (!want && ctx.input().isLocked()) ctx.input().unlock()
-            ctx.walking().manageRun()
+            ctx.walker().local.manageRun()
         }
     }
     guard("login", { !ctx.login().isLoggedIn() }) { ctx.login().login(); 1500 }
@@ -77,5 +77,5 @@ class IdleGate(private val ctx: PluginContext, private val defaultDebounceMs: Lo
 /** Can we stand next to [entity] and interact with it? (mirrors the miner's `canReach`.) */
 fun PluginContext.canReach(entity: SceneEntity): Boolean {
     val tile = entity.tile() ?: return false
-    return walking().canReachToInteract(tile)
+    return terrain().canReachToInteract(tile)
 }
