@@ -5,12 +5,13 @@ import io.osrsx.api.PluginContext
 import io.osrsx.api.scene.SceneObject
 import io.osrsx.api.scene.Tile
 import io.osrsx.api.platform.section
-import io.osrsx.plugin.Routine
-import io.osrsx.plugin.routine
+import io.osrsx.script.ScriptScope
+import io.osrsx.script.StagedScript
+import io.osrsx.script.stagedScript
 
 /**
- * The engine that actually runs a rooftop course, as a guard-less step-based [Routine] nested under the
- * plugin's core routine (which owns the login/break/idle prologue) — the agility analogue of [NormalMiner].
+ * The engine that actually runs a rooftop course, as a guard-less staged ladder ([StagedScript]) nested under
+ * the plugin's core script (which owns the login/break/idle prologue) — the agility analogue of [NormalMiner].
  *
  * ## Finding obstacles without a hardcoded script
  *
@@ -48,7 +49,7 @@ class CourseRunner(
     /** One obstacle resolved in the live scene: the [obj] to click, its unique [tile] key, and the [action]. */
     private data class Target(val obj: SceneObject, val tile: Tile, val action: String)
 
-    /** One coherent read per tick, shared by every step (see [io.osrsx.plugin.Routine]). */
+    /** One coherent read per pass, shared by every stage (see [StagedScript]). */
     private data class Snap(val me: Tile?, val busy: Boolean, val mark: GroundItem?)
 
     // Obstacle traversals are long animations with brief idle dips at the ends; debounce generously so a dip
@@ -80,14 +81,15 @@ class CourseRunner(
     private var lastLanding: Tile? = null
     private var prevLanding: Tile? = null
 
-    val routine: Routine<*> = routine<Snap>(
-        profiler = ctx.profiler(),
-        spanPrefix = "agility",
-        status = { stats.status = it },
-        sense = { sense() },
-    ) {
-        step("picking up mark", { !busy && mark != null && committed == null }) { grabMark(mark!!) }
-        step("advancing", { true }) { drive(me, busy) }
+    /** The pass's coherent snapshot — written by readState for the stage BODIES to share (stage
+     *  predicates receive the state, bodies don't). */
+    private var sensed = Snap(null, false, null)
+
+    val staged: StagedScript<*> = stagedScript<Snap>("agility") {
+        readState { sense().also { sensed = it } }
+        isComplete { false } // cyclic — the plugin's outer gate (stop targets) decides
+        stage("picking up mark", { !it.busy && it.mark != null && committed == null }) { park(grabMark(sensed.mark!!)) }
+        stage("advancing", { true }) { stats.status = "advancing"; park(drive(sensed.me, sensed.busy)) }
     }
 
     private fun sense(): Snap = ctx.profiler().section("agility/sense") {
@@ -159,8 +161,8 @@ class CourseRunner(
         if (learning) { ring.clear(); lapVisited.clear() }
     }
 
-    /** The main per-tick driver: perform the committed obstacle, or pick the next one. */
-    private fun drive(me: Tile?, busy: Boolean): Long {
+    /** The main per-pass driver: perform the committed obstacle, or pick the next one. */
+    private suspend fun ScriptScope.drive(me: Tile?, busy: Boolean): Long {
         if (me == null) return snap(300, 700)
         // A busy period AFTER we clicked is the obstacle's walk-to + traversal animation.
         if (busy) { if (interacted) sawBusy = true; stats.status = "traversing"; return snap(250, 700) }
@@ -183,7 +185,7 @@ class CourseRunner(
     }
 
     /** Drive the obstacle we're committed to: approach → click → wait for the traversal to complete. */
-    private fun driveCommitted(c: Target, me: Tile): Long = ctx.profiler().section("agility/obstacle") {
+    private suspend fun ScriptScope.driveCommitted(c: Target, me: Tile): Long = ctx.profiler().section("agility/obstacle") {
         val now = System.currentTimeMillis()
         val obj = objAt(c.tile)
         if (obj == null) {
@@ -206,13 +208,13 @@ class CourseRunner(
         // obstacle's own tile, which for a wall/beam is the no-op position where the action does nothing.
         if (obj.clickbox() != null) {
             stats.status = "traversing"
-            if (!obj.leftClickIfDefault(c.action)) obj.interact(c.action)
+            act("obstacle") { if (!obj.leftClickIfDefault(c.action)) obj.interact(c.action) }
             interacted = true; clickMs = now; sawBusy = false
             return@section snap(300, 700)
         }
         stats.status = "approaching"
-        ctx.camera().rotateToObject(obj)
-        if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) ctx.walker().local.walkStep(c.tile)
+        act("rotate") { ctx.camera().rotateToObject(obj) }
+        if (me.distanceTo(c.tile) > ROTATE_ONLY_DIST) act("walk-step") { ctx.walker().local.walkStep(c.tile) }
         snap(300, 800)
     }
 
@@ -245,13 +247,13 @@ class CourseRunner(
         prev = t.tile
     }
 
-    private fun grabMark(mark: GroundItem): Long = ctx.profiler().section("agility/mark") {
+    private suspend fun ScriptScope.grabMark(mark: GroundItem): Long = ctx.profiler().section("agility/mark") {
         stats.status = "grabbing mark"
-        if (mark.interact("Take")) stats.addMark()
+        if (act("take-mark") { mark.interact("Take") }) stats.addMark()
         snap(400, 900)
     }
 
-    private fun walkToCourse(): Long = ctx.profiler().section("agility/walk") {
+    private suspend fun ScriptScope.walkToCourse(): Long = ctx.profiler().section("agility/walk") {
         val start = course()?.start ?: return@section snap(800, 1600)
         val me = ctx.players().localPlayer()?.tile()
         // Stop just short of the start rather than stepping onto it — the start tile is usually the first
@@ -260,7 +262,7 @@ class CourseRunner(
             return@section snap(300, 700)
         }
         stats.status = "walking"
-        ctx.walker().global.pathTo(start)
+        act("path-to-course") { ctx.walker().global.pathTo(start) }
         // Poll the walker on a short interval (like the standalone walker's ~150ms cadence) rather than a long
         // loop delay — otherwise travel to the course is noticeably slower than a plain web-walk.
         snap(120, 320)
