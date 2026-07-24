@@ -191,6 +191,11 @@ class CourseRunner(
 
     /** Drive the obstacle we're committed to: approach → click → wait for the traversal to complete. */
     private suspend fun ScriptScope.driveCommitted(c: Target, me: Tile): Long = ctx.profiler().section("agility/obstacle") {
+        // The walk TO the course is over the moment we're engaging the course itself. A still-driving
+        // global route (its dest is on plane 0, so it can never 'arrive' while we're on the rooftops)
+        // keeps clicking ground tiles all lap — lease contention that stretched obstacle gaps to 5-10s
+        // (seen live). stop() is a cheap cancellation; the SDK leaves navigator stops unwrapped.
+        if (ctx.walker().global.isNavigating()) ctx.walker().global.stop()
         val now = System.currentTimeMillis()
         val obj = objAt(c.tile)
         if (obj == null) {
@@ -267,7 +272,9 @@ class CourseRunner(
             return@section snap(300, 700)
         }
         stats.status = "walking"
-        act("path-to-course") { ctx.walker().global.pathTo(start) }
+        // Fire ONCE and poll: the walker is self-driving, and re-calling pathTo every pass displaces the
+        // incumbent route and re-runs a whole global search per beat.
+        if (!ctx.walker().global.isNavigating()) act("path-to-course") { ctx.walker().global.pathTo(start) }
         // Poll the walker on a short interval (like the standalone walker's ~150ms cadence) rather than a long
         // loop delay — otherwise travel to the course is noticeably slower than a plain web-walk.
         snap(120, 320)
