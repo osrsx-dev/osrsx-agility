@@ -3,7 +3,7 @@ package io.osrsx.plugins.agility
 import io.osrsx.api.platform.profile
 import io.osrsx.plugin.Gfx2D
 import io.osrsx.plugin.HasPanel
-import io.osrsx.plugin.RoutinePlugin
+import io.osrsx.plugin.ClientThreadPlugin
 import io.osrsx.plugin.routine
 
 /**
@@ -19,7 +19,7 @@ import io.osrsx.plugin.routine
  * Built the same way as the miner/smither: a single [RoutinePlugin] whose core routine owns the shared
  * prologue (login/break/idle/run) and delegates each tick to the [CourseRunner] sub-routine.
  */
-class AgilityPlugin : RoutinePlugin(), HasPanel {
+class AgilityPlugin : ClientThreadPlugin(), HasPanel {
 
     override fun settings() = Config
 
@@ -56,7 +56,13 @@ class AgilityPlugin : RoutinePlugin(), HasPanel {
         }
     }
 
-    override fun routine() = core
+    // Client-thread model (sense→decide→actuate): the routine ladder DECIDES on the client thread —
+    // every subroutine gate and step predicate reads live state directly, no snapshot layer, no hops —
+    // and the selected step's body executes on the actuator drain thread. Step delays pace as before.
+    override fun onClientTick() = drive(core)
+
+    override fun onStart() = core.start()
+    override fun onStop() = core.stop()
 
     override fun onPanel(gfx: Gfx2D) = profile("agility/overlay") {
         val target = currentCourse()?.display ?: "—"
