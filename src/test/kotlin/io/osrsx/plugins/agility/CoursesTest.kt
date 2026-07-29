@@ -61,6 +61,15 @@ class CoursesTest {
     }
 
     @Test
+    fun `resolveBest never auto-picks the pyramid`() {
+        // It qualifies at 30 on a members world but is a slower, gp-oriented course needing desert-heat
+        // protection — it must only run when chosen by name.
+        assertEquals(Course.VARROCK, Courses.resolveBest(ctx(members = true, agility = 35)))
+        assertTrue(Courses.optionsFor(ctx(members = true, agility = 35)).any { it.startsWith("Agility Pyramid") },
+            "it must still be offered in the dropdown")
+    }
+
+    @Test
     fun `courseFor resolves BEST and a specific label`() {
         val ctx = ctx(members = true, agility = 99)
         assertNotNull(Courses.courseFor(ctx, Courses.BEST))

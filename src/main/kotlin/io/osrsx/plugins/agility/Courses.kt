@@ -4,15 +4,27 @@ import io.osrsx.api.PluginContext
 import io.osrsx.api.player.Skill
 import io.osrsx.api.scene.Tile
 
+/** Which engine drives a [Course] — see [CourseRunner] and [PyramidRunner]. */
+enum class CourseStyle {
+    /** A self-discovering rooftop loop: obstacles are found live and learned into a coordinate ring. */
+    ROOFTOP,
+
+    /** The Agility Pyramid: a fixed, surveyed climb ending at the summit — see [PyramidCourse]. */
+    PYRAMID,
+}
+
 /**
- * The catalogue of rooftop Agility courses the [AgilityPlugin] can run, and the live account checks that
- * decide which ones a player may actually use — mirroring the miner's [io.osrsx.plugins.skilling.MineSites].
+ * The catalogue of Agility courses the [AgilityPlugin] can run, and the live account checks that decide
+ * which ones a player may actually use — mirroring the miner's [io.osrsx.plugins.skilling.MineSites].
  *
  * Each [Course] carries only its **anchor**: the [start] tile the bot web-walks to, the Agility [level] the
- * course requires, and whether it is [members]-only. It deliberately does NOT hardcode a per-obstacle tile
- * list — the [CourseRunner] finds the next obstacle by looking for the nearest reachable scene object that
- * exposes an Agility action (climb/cross/jump/…), so the course drives itself from the start tile without a
- * brittle coordinate script, and small map inaccuracies can't strand the bot.
+ * course requires, and whether it is [members]-only. A rooftop deliberately does NOT hardcode a per-obstacle
+ * tile list — the [CourseRunner] finds the next obstacle by looking for the nearest reachable scene object
+ * that exposes an Agility action (climb/cross/jump/…), so the course drives itself from the start tile
+ * without a brittle coordinate script, and small map inaccuracies can't strand the bot.
+ *
+ * The Agility Pyramid is the exception, and says so through its [style]: it is a fixed climb whose
+ * obstacles must be taken in a surveyed order, driven by [PyramidRunner] off [PyramidCourse.ROUTE].
  */
 enum class Course(
     val id: String,
@@ -20,11 +32,15 @@ enum class Course(
     val level: Int,
     val members: Boolean,
     val start: Tile,
+    val style: CourseStyle = CourseStyle.ROOFTOP,
 ) {
     // F2P rooftops.
     DRAYNOR("Draynor", "Draynor Village", 10, members = false, start = Tile(3103, 3279, 0)),
     AL_KHARID("AlKharid", "Al Kharid", 20, members = false, start = Tile(3273, 3195, 0)),
     VARROCK("Varrock", "Varrock", 30, members = false, start = Tile(3221, 3417, 0)),
+
+    // The one non-rooftop course: a fixed climb to the summit, worth ~1k XP and 10k coins per lap.
+    PYRAMID("Pyramid", "Agility Pyramid", 30, members = true, start = PyramidCourse.START, style = CourseStyle.PYRAMID),
 
     // Members rooftops.
     CANIFIS("Canifis", "Canifis", 40, members = true, start = Tile(3507, 3489, 0)),
@@ -74,8 +90,13 @@ object Courses {
     /** The course whose [Course.label] equals the stored config value, or null if none matches. */
     fun byLabel(label: String): Course? = Course.entries.firstOrNull { it.label() == label }
 
-    /** The highest-level course the account currently qualifies for, or null if it qualifies for none. */
-    fun resolveBest(ctx: PluginContext): Course? = eligibleCourses(ctx).maxByOrNull { it.level }
+    /**
+     * The highest-level ROOFTOP course the account currently qualifies for, or null if it qualifies for
+     * none. The Agility Pyramid is excluded on purpose: it is a slower, gp-oriented course that also needs
+     * desert-heat protection, so it is only ever run when the user asks for it by name.
+     */
+    fun resolveBest(ctx: PluginContext): Course? =
+        eligibleCourses(ctx).filter { it.style == CourseStyle.ROOFTOP }.maxByOrNull { it.level }
 
     /**
      * Resolve the stored Course value to a concrete course: [BEST] (or an unknown/blank value) resolves via

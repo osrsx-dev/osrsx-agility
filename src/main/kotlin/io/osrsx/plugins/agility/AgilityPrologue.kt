@@ -29,6 +29,7 @@ fun StagedScriptBuilder<Unit>.agilityPrologue(
     lockInput: () -> Boolean,
     stopReason: () -> String?,
     status: (String) -> Unit = {},
+    holdDialogue: () -> Boolean = { false },
 ) {
     beforeEach {
         if (ctx.login().isLoggedIn()) {
@@ -54,7 +55,11 @@ fun StagedScriptBuilder<Unit>.agilityPrologue(
         park(1500)
     }
     stage("yielding", { ctx.coordination().shouldYield() }) { status("yielding"); park(Rng.uniform(1200, 2000)) }
-    stage("dialogue", { ctx.dialogues().inDialogue() }) {
+    // The auto-continue is the right default for the incidental chat a course walks into, but it must not
+    // answer a dialogue a domain stage is deliberately steering: Simon Templeton's pyramid-top sale ends on
+    // a "Sell it. / Keep it." choice, and a blind continue would answer it for us. [holdDialogue] lets the
+    // owning runner take the conversation.
+    stage("dialogue", { !holdDialogue() && ctx.dialogues().inDialogue() }) {
         status("dialogue")
         act("dialogue") { ctx.dialogues().continueAuto() }
         park(Rng.uniform(600, 1000))

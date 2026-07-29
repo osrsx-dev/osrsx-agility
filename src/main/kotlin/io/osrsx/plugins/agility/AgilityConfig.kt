@@ -14,11 +14,19 @@ object Config : PluginSettings("agility") {
     var course by enumItem(
         "course", "Course",
         default = Courses.BEST,
-        description = "Which rooftop course to run — only courses your Agility level (and world) qualify for are shown",
+        description = "Which Agility course to run — only courses your Agility level (and world) qualify " +
+            "for are shown. 'Auto' picks the best rooftop; the Agility Pyramid must be chosen by name.",
     ) { ctx -> Courses.optionsFor(ctx) }
 
     var pickupMarks by boolItem("pickupMarks", "Pick up Marks of Grace", true,
         "Grab Marks of Grace off the rooftops as they spawn", section = "Setup")
+
+    var pyramidTops by enumItem("pyramidTops", "Pyramid tops",
+        default = TopsPolicy.SELL.label,
+        options = TopsPolicy.entries.map { it.label },
+        description = "Agility Pyramid only — what to do with the Pyramid tops laps award once the " +
+            "inventory is full. Selling walks to Simon Templeton at the base (10,000 coins each).",
+        section = "Setup")
 
     var speed by intItem("speed", "Speed", 100, 25, 400,
         "Loop speed as a percent — higher reacts faster between obstacles (100% = normal)", section = "Setup")

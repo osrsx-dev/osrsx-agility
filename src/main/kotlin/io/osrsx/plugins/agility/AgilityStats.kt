@@ -41,6 +41,7 @@ class AgilityStats(private val ctx: PluginContext) {
     private var startMs = 0L
     private var laps = 0
     private var marks = 0
+    private var tops = 0
 
     /** Capture the baseline XP and clock. Call from `onStart`. */
     fun start() {
@@ -48,12 +49,18 @@ class AgilityStats(private val ctx: PluginContext) {
         startMs = System.currentTimeMillis()
         laps = 0
         marks = 0
+        tops = 0
     }
 
     fun addLap() { laps++ }
     fun addMark() { marks++ }
+
+    /** A Pyramid top awarded by a finished Agility Pyramid lap (the pyramid's answer to a Mark of Grace). */
+    fun addTop() { tops++ }
+
     fun laps(): Int = laps
     fun marks(): Int = marks
+    fun tops(): Int = tops
 
     fun level(): Int = ctx.skills().real(Skill.AGILITY)
 
