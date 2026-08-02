@@ -117,10 +117,57 @@ class PyramidCourseTest {
         assertEquals(10, PyramidCourse.resumeIndexAt(fell, PyramidCourse.FALLBACK_RADIUS))
     }
 
+    /**
+     * Standing short of an obstacle must NOT count as having completed it.
+     *
+     * This is the same side-of-the-obstacle confusion as the resume bug, in the other predicate: the
+     * runner never reached `resync` at all, because `completed` had already advanced it past the very
+     * obstacle it was standing in front of.
+     */
+    @Test
+    fun `being short of an obstacle does not complete it`() {
+        val shortOfLowWall = Tile(3355, 2848, 1) // 1 tile from the Low wall, 2 from its landing
+        assertTrue(!PyramidCourse.landedOn(1, shortOfLowWall), "the Low wall has not been climbed yet")
+        assertTrue(PyramidCourse.landedOn(1, Tile(3355, 2850, 1)), "its landing still completes it")
+    }
+
+    /**
+     * The other side of the same coin: having crossed must not read as not-yet-crossed.
+     *
+     * 3354,2850 sits one tile from the Low wall (3354,2849) and one from its landing (3355,2850), so a
+     * "nearer the landing than the obstacle" comparison cannot separate them — and calling it incomplete
+     * made the runner climb straight back over the wall it had just crossed, forever.
+     */
+    @Test
+    fun `landing beside the obstacle still completes it`() {
+        assertTrue(PyramidCourse.landedOn(1, Tile(3354, 2850, 1)), "past the wall is past it")
+        assertTrue(PyramidCourse.landedOn(1, Tile(3355, 2850, 1)), "and so is the landing itself")
+        assertTrue(!PyramidCourse.landedOn(1, Tile(3355, 2848, 1)), "but the approach side is not")
+    }
+
     @Test
     fun `an unknown position resolves to no step`() {
         assertNull(PyramidCourse.resumeIndexAt(Tile(3200, 3200, 0)), "Varrock is not on the pyramid")
-        assertNull(PyramidCourse.resumeIndexAt(Tile(3354, 2831, 0)), "the start tile is an obstacle, not a landing")
+    }
+
+    /**
+     * Standing SHORT of an obstacle must resume at that obstacle, not past it.
+     *
+     * The contract used to match landings only, so a position at an obstacle answered null. That was not
+     * merely incomplete, it was wrong in a way that skipped obstacles: a landing sits a tile or two beyond
+     * its own obstacle, so a fall dropping the player just short of one still fell inside that landing's
+     * radius and was credited as having crossed it.
+     */
+    @Test
+    fun `a position short of an obstacle resumes AT it, not past it`() {
+        assertEquals(0, PyramidCourse.resumeIndexAt(Tile(3354, 2831, 0)), "on the Stairs, the Stairs are next")
+        // Measured live: 1 tile from the Low wall (step 1), 2 tiles from its landing. The old rule picked
+        // the nearest landing and returned landing + 1, sending the run to the Ledge beyond it.
+        assertEquals(
+            1,
+            PyramidCourse.resumeIndexAt(Tile(3355, 2848, 1), PyramidCourse.FALLBACK_RADIUS),
+            "short of the Low wall resumes at the Low wall",
+        )
     }
 
     @Test

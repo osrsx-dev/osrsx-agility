@@ -9,6 +9,25 @@ import io.osrsx.script.ScriptScope
 import io.osrsx.script.StagedScript
 import io.osrsx.script.stagedScript
 
+/** Splits a menu action into whole word tokens (on spaces, hyphens, punctuation). */
+private val NON_LETTER: Regex = Regex("[^a-z]+")
+
+/**
+ * Whole-token verbs that mark a menu action as a rooftop Agility obstacle (confirmed live:
+ * Climb/Cross/Leap/Balance/Hurdle/Jump-off on Varrock, Swing-across + Teeth-grip on Al Kharid). Matched as
+ * complete tokens, never substrings, so `Chop down` (→ chop, down) is not mistaken for `hop`. `across`
+ * catches `Walk-across`/`Swing-across`; `grip` catches `Teeth-grip`.
+ */
+private val AGILITY_TOKENS: Set<String> = setOf(
+    "climb", "cross", "swing", "grip", "leap", "jump", "balance", "hurdle", "vault", "grab",
+    "squeeze", "teeter", "hop", "dive", "edge", "across", "hang",
+)
+
+/** Whether [action] reads as a rooftop Agility obstacle verb. File-level so the plugin's debug hook can
+ *  apply the SAME test to a human's menu click rather than keeping a second copy of the verb list. */
+internal fun isAgilityAction(action: String): Boolean =
+    action.lowercase().split(NON_LETTER).any { it in AGILITY_TOKENS }
+
 /**
  * The engine that actually runs a rooftop course, as a guard-less staged ladder ([StagedScript]) nested under
  * the plugin's core script (which owns the login/idle prologue) — the agility analogue of [NormalMiner].
@@ -46,11 +65,13 @@ class CourseRunner(
     private val speed: () -> Int,
     private val stats: AgilityStats,
 ) {
+    private val log = io.osrsx.plugin.PluginLog("agility")
+
     /** One obstacle resolved in the live scene: the [obj] to click, its unique [tile] key, and the [action]. */
     private data class Target(val obj: SceneObject, val tile: Tile, val action: String)
 
     /** One coherent read per pass, shared by every stage (see [StagedScript]). */
-    private data class Snap(val me: Tile?, val busy: Boolean, val mark: GroundItem?)
+    private data class Snap(val me: Tile?, val busy: Boolean, val mark: GroundItem?, val eat: Boolean)
 
     // Obstacle traversals are long animations with brief idle dips at the ends; debounce generously so a dip
     // between the walk-to and the obstacle animation still reads as "busy".
@@ -68,6 +89,16 @@ class CourseRunner(
     private var learning = true
     private var idx = 0
     private var prev: Tile? = null
+
+    /**
+     * The obstacle BEFORE [prev] — the other half of the back-edge guard.
+     *
+     * Excluding only [prev] is not enough on a rooftop that doubles back on itself: when the ring's expected
+     * obstacle is not in the scene yet, the nearest candidate is often the one two steps behind, so the
+     * fallback in [selectTarget] picked it, ran the course backwards and then had to recover. Falador is the
+     * clearest case. Always self-correcting, always wasted time.
+     */
+    private var prev2: Tile? = null
     private var elevated = false
     private var recovering = false
 
@@ -88,13 +119,46 @@ class CourseRunner(
 
     /** The pass's coherent snapshot — written by readState for the stage BODIES to share (stage
      *  predicates receive the state, bodies don't). */
-    private var sensed = Snap(null, false, null)
+    private var sensed = Snap(null, false, null, false)
 
     val staged: StagedScript<*> = stagedScript<Snap>("agility") {
         readState { sense().also { sensed = it } }
         isComplete { false } // cyclic — the plugin's outer gate (stop targets) decides
+        stage("eating", { it.eat }) { park(eatFood()) }
         stage("picking up mark", { !it.busy && it.mark != null && committed == null }) { park(grabMark(sensed.mark!!)) }
         stage("advancing", { true }) { stats.status = "advancing"; park(drive(sensed.me, sensed.busy)) }
+    }
+
+    /** Latched once eating starts, so a top-up runs to [Config.eatUntilPercent] rather than stopping the
+     *  moment we climb back over [Config.eatAtPercent] — one bite is rarely enough. */
+    private var toppingUp = false
+
+    private fun shouldEat(): Boolean {
+        if (!Config.autoEat || Config.food.isBlank()) return false
+        val hp = ctx.skills().hitpointsPercent()
+        if (hp <= Config.eatAtPercent) toppingUp = true
+        // Never let a `until` below `at` latch us on forever.
+        if (hp >= maxOf(Config.eatUntilPercent, Config.eatAtPercent)) toppingUp = false
+        return toppingUp && edible() != null
+    }
+
+    /**
+     * Anything in the inventory that can actually be eaten, matched by the `Eat` ACTION not by name.
+     *
+     * Food is renamed as it is eaten — `Cake` becomes `2/3 cake` becomes `Slice of cake` — and those are
+     * unrelated item names, not variants the SDK can relate: `Item.nameMatches("Cake")` is false for both
+     * (verified live). Counting the configured name alone left a run standing there unable to eat the
+     * two-thirds of a cake in its own inventory, while simultaneously reporting "no food" and setting off
+     * a bank trip. The action is the only honest test of edibility.
+     */
+    private fun edible() =
+        ctx.inventory().items().firstOrNull { item -> item.actions.any { it.equals("Eat", ignoreCase = true) } }
+
+    /** Eat whatever edible we are carrying. */
+    private suspend fun ScriptScope.eatFood(): Long = ctx.profiler().section("agility/eat") {
+        stats.status = "eating"
+        act("eat") { edible()?.let { ctx.inventory().interact(it, "Eat") } ?: false }
+        snap(600, 1200)
     }
 
     private fun sense(): Snap = ctx.profiler().section("agility/sense") {
@@ -108,14 +172,14 @@ class CourseRunner(
         checkStuck(me)
 
         val mark = if (pickupMarks() && me != null) nearestMark(me) else null
-        Snap(me, busy, mark)
+        Snap(me, busy, mark, shouldEat())
     }
 
     /** Wipe the learned ring and progress when the player picks a different course. */
     private fun resetFor(c: Course?) {
         courseId = c?.id
         ring.clear(); lapVisited.clear(); cooldown.clear()
-        learning = true; idx = 0; prev = null; elevated = false; recovering = false
+        learning = true; idx = 0; prev = null; prev2 = null; elevated = false; recovering = false
         committed = null; interacted = false; sawBusy = false
         lastPos = null; lastProgressMs = 0L
         lastLanding = null; prevLanding = null
@@ -134,7 +198,12 @@ class CourseRunner(
         elevated = false
         if (me.distanceTo(c.start) <= LAP_RADIUS) {
             idx = 0
-            if (learning && ring.size >= MIN_RING) learning = false
+            if (learning && ring.size >= MIN_RING) {
+                learning = false
+                // The ring IS the survey: dump it in traversal order so a per-course ordered table can be
+                // built from a real run rather than hand-guessed coordinates.
+                log.i("${c.id}: ring frozen (${ring.size}) ${ring.joinToString(" ") { "${it.x},${it.y},${it.plane}" }}")
+            }
             stats.addLap()
         } else {
             onFall()
@@ -159,7 +228,7 @@ class CourseRunner(
     /** A fall dropped us off the course mid-lap: forget where we were and walk back to the start to restart. */
     private fun onFall() {
         recovering = true
-        idx = 0; prev = null
+        idx = 0; prev = null; prev2 = null
         committed = null; interacted = false; sawBusy = false
         lastLanding = null; prevLanding = null
         // A fall mid-learning leaves a partial, out-of-order ring — relearn it cleanly from the start.
@@ -245,7 +314,13 @@ class CourseRunner(
 
     /** Advance the learned ring / follow index and blacklist this obstacle as the previous one. */
     private fun recordProgress(t: Target) {
-        if (learning) {
+        val route = RooftopRoutes.of(course())
+        if (route != null) {
+            // Advance by the step the obstacle BELONGS to, not by incrementing blindly — so either arm of a
+            // fork lands on the same next step, and a stray click cannot shift the whole course by one.
+            val at = RooftopRoutes.indexOf(route, t.tile)
+            if (at >= 0) idx = (at + 1) % route.size
+        } else if (learning) {
             if (t.tile !in lapVisited) {
                 lapVisited.add(t.tile)
                 if (t.tile !in ring) ring.add(t.tile)
@@ -254,6 +329,7 @@ class CourseRunner(
             val at = ring.indexOf(t.tile)
             if (at >= 0) idx = (at + 1) % ring.size
         }
+        prev2 = prev
         prev = t.tile
     }
 
@@ -283,13 +359,45 @@ class CourseRunner(
     /** The next obstacle to do: from the ring while following, or the nearest not-yet-done while learning. */
     private fun selectTarget(me: Tile): Target? {
         val now = System.currentTimeMillis()
-        val obstacles = obstaclesInScene(me).filter { (cooldown[it.tile] ?: 0L) < now }
+        val inScene = obstaclesInScene(me)
+        if (inScene.isEmpty()) return null
+
+        // A surveyed course follows its table and NEVER substitutes. If the step's obstacle is not in scene
+        // yet, returning null makes [drive] wait a beat on the roof — which is right, because the alternative
+        // (take the nearest thing instead) is precisely what walked the course backwards.
+        //
+        // Deliberately reads the UNFILTERED list: a cooldown means "that click did nothing, try something
+        // else", which is sound for a learned ring but meaningless here — the step is the step, and there is
+        // nothing else to try. Honouring it filtered away the only option, so [drive] sat out the whole
+        // COOLDOWN_MS doing nothing (a ~5s dead wait on top of the 3.5s it takes to notice). Re-clicking the
+        // same obstacle is the correct response; the commit/STUCK_MS cycle already paces the retry.
+        RooftopRoutes.of(course())?.let { route ->
+            val step = route[idx % route.size]
+            val here = inScene.filter { o -> step.options.any { it.tile == o.tile } }
+            // Random among the options actually present: where a step genuinely offers two obstacles either
+            // is correct, so varying which one is taken is both valid and less mechanical than always
+            // picking the same one.
+            return here.randomOrNull()
+        }
+
+        val obstacles = inScene.filter { (cooldown[it.tile] ?: 0L) < now }
         if (obstacles.isEmpty()) return null
         return if (learning) {
             obstacles.filter { it.tile !in lapVisited }.minByOrNull { me.distanceTo(it.tile) }
         } else {
             val want = ring.getOrNull(idx)
-            obstacles.firstOrNull { it.tile == want }
+            val exact = obstacles.firstOrNull { it.tile == want }
+            if (exact == null) {
+                // Every wrong-obstacle click comes through here. Silent until now, which is why it read as
+                // "it just sometimes goes backwards" rather than "the ring desynced at step N".
+                log.i("substituting: want=${want?.let { "${it.x},${it.y}" } ?: "none"} idx=$idx/${ring.size} " +
+                    "inScene=${obstacles.joinToString(",") { "${it.tile.x},${it.tile.y}" }}")
+            }
+            exact
+                // Substituting is for a genuinely unknown position (a mid-run start), so it must not pick a
+                // way BACKWARDS. Skip the last two obstacles first; only if nothing else is in scene fall
+                // back to the looser filters, so the course can still recover rather than stall.
+                ?: obstacles.filter { it.tile != prev && it.tile != prev2 }.minByOrNull { me.distanceTo(it.tile) }
                 ?: obstacles.filter { it.tile != prev }.minByOrNull { me.distanceTo(it.tile) }
                 ?: obstacles.minByOrNull { me.distanceTo(it.tile) }
         }
@@ -316,7 +424,7 @@ class CourseRunner(
      * verbs but are excluded by NAME (see [isBlockedName]), not by action.
      */
     private fun agilityAction(o: SceneObject): String? =
-        o.actions().firstOrNull { a -> a.lowercase().split(NON_LETTER).any { it in AGILITY_TOKENS } }
+        o.actions().firstOrNull { isAgilityAction(it) }
 
     /**
      * Every Agility obstacle in scene, keyed by tile — ladders/staircases excluded by name. Deliberately NOT
@@ -345,20 +453,6 @@ class CourseRunner(
 
     private companion object {
         const val MARK_OF_GRACE = "Mark of grace"
-
-        /** Splits a menu action into whole word tokens (on spaces, hyphens, punctuation). */
-        val NON_LETTER: Regex = Regex("[^a-z]+")
-
-        /**
-         * Whole-token verbs that mark a menu action as a rooftop Agility obstacle (confirmed live:
-         * Climb/Cross/Leap/Balance/Hurdle/Jump-off on Varrock, Swing-across + Teeth-grip on Al Kharid). Matched
-         * as complete tokens, never substrings, so `Chop down` (→ chop, down) is not mistaken for `hop`.
-         * `across` catches `Walk-across`/`Swing-across`; `grip` catches `Teeth-grip`.
-         */
-        val AGILITY_TOKENS: Set<String> = setOf(
-            "climb", "cross", "swing", "grip", "leap", "jump", "balance", "hurdle", "vault", "grab",
-            "squeeze", "teeter", "hop", "dive", "edge", "across", "hang",
-        )
 
         /** Names carrying an Agility-looking action that are NOT course obstacles — ladders/stairs/trapdoors.
          *  This (the NAME, not the action) is what excludes `Climb-up`/`Climb-down` ladders, so real obstacles

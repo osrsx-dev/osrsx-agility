@@ -27,7 +27,33 @@ import io.osrsx.script.stagedScript
  */
 class AgilityPlugin : ScriptPlugin() {
 
+    private companion object {
+        /** Radius to resolve a clicked obstacle's tile from its id — matches the runner's own scan. */
+        const val OBSTACLE_SCAN = 32
+    }
+
     override fun settings() = Config
+
+    /**
+     * Debug survey hook: record every Agility obstacle interaction, in the order it happens.
+     *
+     * Subscribed rather than logged from our own click path on purpose — `MenuOptionClicked` fires for a
+     * HUMAN click too, so a manually walked lap records the course's real order. That matters because the
+     * rooftop ring is self-discovered and can only ever record the obstacle it happened to take, which is
+     * exactly how an equivalent-alternative obstacle (Falador) desyncs it.
+     *
+     * Off by default; the id is logged alongside the tile because names repeat across a course.
+     */
+    private fun watchObstacles() {
+        subscribe<io.osrsx.api.events.MenuOptionClicked> { e ->
+            if (!Config.debugObstacles || !isAgilityAction(e.option)) return@subscribe
+            val at = ctx.objects().query().within(OBSTACLE_SCAN).list().firstOrNull { it.id == e.id }?.tile()
+            log.i(
+                "obstacle: ${e.option} '${e.target}' id=${e.id} " +
+                    "at ${at?.let { "${it.x},${it.y},${it.plane}" } ?: "off-scene"}",
+            )
+        }
+    }
 
     private val stats by lazy { AgilityStats(ctx) }
 
@@ -75,7 +101,7 @@ class AgilityPlugin : ScriptPlugin() {
                 status = { stats.status = it },
                 holdDialogue = { onPyramid() && pyramid.isSelling() },
             )
-            onStart { stats.start(); pyramid.reset() }
+            onStart { stats.start(); pyramid.reset(); watchObstacles() }
             onStop { if (ctx.input().isLocked()) ctx.input().unlock() }
             substage("pyramid", { onPyramid() }, pyramid.staged)
             substage("rooftop", { true }, rooftops.staged)

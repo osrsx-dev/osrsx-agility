@@ -181,8 +181,36 @@ object PyramidCourse {
     fun landedOn(index: Int, me: Tile): Boolean {
         val here = me.distanceTo(ROUTE[index].landing)
         if (here > LANDING_RADIUS) return false
+        if (here == 0) return true // exactly on it; no side to disambiguate
         val startedFrom = ROUTE[(index + ROUTE.size - 1) % ROUTE.size].landing
-        return here < me.distanceTo(startedFrom)
+        // Being NEAR the landing is not the same as being PAST the obstacle. A landing sits only a tile or
+        // two beyond its own obstacle, so a fall — or a click that only auto-walked part way — can leave the
+        // player short of the obstacle yet still inside its landing radius. Comparing against the previous
+        // landing alone cannot tell those apart (that one is far away in both cases), so the step read as
+        // complete and the run advanced past the obstacle in front of it: measured at 3355,2848, two tiles
+        // from the Low wall's landing and one from the Low wall itself. Require that the landing is the
+        // nearer of the two.
+        return here < me.distanceTo(startedFrom) && pastObstacle(index, me)
+    }
+
+    /**
+     * Whether [me] is on the FAR side of step [index]'s obstacle — the side its landing is on.
+     *
+     * Projecting `me - obstacle` onto `landing - obstacle` answers this for every obstacle shape in the
+     * route: positive means we are beyond it, zero or negative means we are still on the approach.
+     *
+     * Distance cannot answer it. Comparing "nearer the landing than the obstacle" is wrong on both sides:
+     * the Low wall's landing (3355,2850) is diagonally adjacent to the wall itself (3354,2849), so landing
+     * on 3354,2850 is one tile from each, fails the comparison, and the runner climbs back over — the
+     * observed oscillation. Comparing against only the PREVIOUS landing is wrong the other way, since that
+     * is far away whichever side of this obstacle we stand on.
+     */
+    private fun pastObstacle(index: Int, me: Tile): Boolean {
+        val obstacle = ROUTE[index].tile
+        val landing = ROUTE[index].landing
+        val alongX = (me.x - obstacle.x) * (landing.x - obstacle.x)
+        val alongY = (me.y - obstacle.y) * (landing.y - obstacle.y)
+        return alongX + alongY > 0
     }
 
     /**
@@ -195,10 +223,16 @@ object PyramidCourse {
      * completed (the Plank you stepped off is closer than the Gap you are heading for).
      */
     fun resumeIndexAt(me: Tile, radius: Int = RESUME_RADIUS): Int? {
-        val landed = anchors()
-            .filter { me.distanceTo(ROUTE[it].landing) <= radius }
-            .minByOrNull { me.distanceTo(ROUTE[it].landing) } ?: return null
-        return (landed + 1) % ROUTE.size
+        val distance = { i: Int -> minOf(me.distanceTo(ROUTE[i].landing), me.distanceTo(ROUTE[i].tile)) }
+        val best = anchors().filter { distance(it) <= radius }.minByOrNull(distance) ?: return null
+        // Which SIDE of that step we are on decides whether it still has to be performed. Matching the
+        // nearest landing and always resuming at `landing + 1` silently assumed the step was finished —
+        // but an obstacle's landing sits a tile or two beyond the obstacle itself, so a fall that drops
+        // you just SHORT of one still lands inside its landing radius, and the run skipped the very
+        // obstacle in front of it (measured: standing at 3355,2848 is 1 tile from the Low wall and 2 from
+        // its landing, and resumed on the Ledge after it). Closer to the landing than to the obstacle
+        // means we are genuinely across; otherwise this step is still the one to do.
+        return if (pastObstacle(best, me)) (best + 1) % ROUTE.size else best
     }
 
     /**
@@ -212,6 +246,58 @@ object PyramidCourse {
     /** True when [me] is on the ground at the pyramid's base — where every fall and every finished lap ends,
      *  and the only place the run can safely restart from (or walk off to [SIMON]). */
     fun atBase(me: Tile): Boolean = me.plane == 0 && me.regionId == BASE_REGION
+
+    /**
+     * Westmost x of the base plateau: the pyramid itself starts here, past the `Climbing rocks`.
+     *
+     * The plateau is entered from the desert over rocks bridging 3348 -> 3352, which only the GLOBAL walker
+     * can cross (they are a transport, not a walkable tile). [SIMON] and the whole approach stand west of
+     * them; the ground `Stairs` that open a lap stand six tiles east — near enough to be on screen, and so
+     * to have a clickbox, from the wrong side.
+     */
+    const val PLATEAU_X: Int = 3352
+
+    /**
+     * True when [me] is on the plateau itself rather than merely in its region.
+     *
+     * [atBase] is too coarse to answer this: a region is 64 tiles wide, so the rocks and BOTH banks share
+     * [BASE_REGION] and `atBase` already reads true out in the desert.
+     */
+    fun onPlateau(me: Tile): Boolean = atBase(me) && me.x >= PLATEAU_X
+
+    // ---- desert support: a pyramid run is bounded by water, not by Agility ----
+
+    /** A waterskin by remaining dose — the game names them `Waterskin(0)` .. `Waterskin(4)`. */
+    fun skinName(doses: Int): String = "Waterskin($doses)"
+
+    /** A skin holding all four doses. The refill trigger counts THESE, not empty ones. */
+    val FULL_SKIN: String = skinName(4)
+
+    /**
+     * Where waterskins are refilled: the fountain in Pollnivneach, ~135 tiles north of the pyramid.
+     *
+     * Narrower than the map suggests, and all three candidates were tried in game before settling here:
+     * the `Well` beside it (id 6249) carries no actions at all, and the desert `Water` (id 6605) offers
+     * only `Collect`, which is not a refill. The fountain has no menu action either — a refill is an
+     * item-on-object *use* of a skin, and one use tops up EVERY non-full skin in the inventory, so the
+     * trip is a single interaction however many skins are carried.
+     */
+    val WATER_TILE: Tile = Tile(3367, 2970, 0)
+
+    /** The refill object, found by NAME: `GameObjects.closest`'s id overload is a `vararg Int`, which the
+     *  name overload avoids needing. */
+    const val WATER_OBJECT: String = "Fountain"
+
+    /**
+     * The support bank: Nardah, 72 tiles from the pyramid — the closest bank to the COURSE.
+     *
+     * Fixed deliberately, rather than asking `GlobalWalker.nearestBank()` each time. That answers "which
+     * bank is nearest to where I stand", which is the wrong question for a trip that has to come back: it
+     * will happily route through a teleport that lands across the map, because the walk home is not part
+     * of what it minimises. Pinning the bank nearest the PYRAMID makes the round trip the cost being
+     * optimised, which is the only cost that matters here.
+     */
+    val BANK_TILE: Tile = Tile(3426, 2894, 0)
 }
 
 /** What the runner does with the [PyramidCourse.TOP_ITEM]s a lap awards once the inventory fills up. */
