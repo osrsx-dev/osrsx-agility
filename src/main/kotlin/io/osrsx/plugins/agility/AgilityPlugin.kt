@@ -101,8 +101,18 @@ class AgilityPlugin : ScriptPlugin() {
                 status = { stats.status = it },
                 holdDialogue = { onPyramid() && pyramid.isSelling() },
             )
-            onStart { stats.start(); pyramid.reset(); watchObstacles() }
-            onStop { if (ctx.input().isLocked()) ctx.input().unlock() }
+            // Re-arm the framing on every START, not only on a logout or a met stop target. [CameraFraming]
+            // is a singleton and a plugin stopped and started again keeps the same one, so without this the
+            // second run inherits `done() == true` and never touches the camera — the failure that only a
+            // client restart appeared to fix, because that is what clears the object.
+            onStart { stats.start(); pyramid.reset(); watchObstacles(); CameraFraming.reset() }
+            // A hand stop must hand the camera back too. onComplete already does, but it only fires on a met
+            // stop target — stopping the plugin yourself left the pitch relaxer (a persistent client flag) set.
+            onStop {
+                if (ctx.input().isLocked()) ctx.input().unlock()
+                CameraFraming.releaseCamera(ctx)
+                ctx.cameraControl().release()
+            }
             substage("pyramid", { onPyramid() }, pyramid.staged)
             substage("rooftop", { true }, rooftops.staged)
         }
