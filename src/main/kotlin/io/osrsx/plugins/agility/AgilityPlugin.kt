@@ -62,7 +62,14 @@ class AgilityPlugin : ScriptPlugin() {
             level = { Config.stopAtLevel }, laps = { Config.stopAtLaps }, minutes = { Config.stopAfterMins })
     }
 
-    private fun currentCourse(): Course? = Courses.courseFor(ctx, Config.course)
+    /** The course used on the previous tick — what [Courses.settle] pins an "Auto" run to while on a roof. */
+    private var lastCourse: Course? = null
+
+    private fun currentCourse(): Course? {
+        val onRoof = (ctx.players().localPlayer()?.tile()?.plane ?: 0) > 0
+        return Courses.settle(Config.course, Courses.courseFor(ctx, Config.course), lastCourse, onRoof)
+            .also { lastCourse = it }
+    }
 
     private fun onPyramid(): Boolean = currentCourse()?.style == CourseStyle.PYRAMID
 

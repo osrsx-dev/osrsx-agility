@@ -112,4 +112,19 @@ object Courses {
     fun courseFor(ctx: PluginContext, selection: String): Course? =
         if (selection == BEST || selection.isBlank()) resolveBest(ctx)
         else byLabel(selection) ?: resolveBest(ctx)
+
+    /**
+     * Keep an "Auto" run on the course it started a lap on while the player is up on a roof.
+     *
+     * [BEST] re-resolves from the live Agility level on every tick, so a level-up can flip it to a harder course
+     * in the middle of a lap (Draynor -> Al Kharid at 20). The runner then looks for the NEW course's obstacles
+     * from the OLD course's roof, finds none, and stalls — and the on-roof watchdog can only re-pick, because
+     * the web walker has no way off a roof. So while [onRoof], a previous rooftop [pinned] wins over [resolved];
+     * the switch happens as soon as the lap ends and the player is back on the ground. A course chosen by name
+     * is never overridden, and neither is the Pyramid.
+     */
+    fun settle(selection: String, resolved: Course?, pinned: Course?, onRoof: Boolean): Course? =
+        if (onRoof && pinned != null && pinned.style == CourseStyle.ROOFTOP &&
+            (selection == BEST || selection.isBlank())) pinned
+        else resolved
 }

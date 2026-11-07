@@ -93,4 +93,29 @@ class CoursesTest {
         assertNotNull(Courses.courseFor(ctx, Courses.BEST))
         assertEquals(Course.FALADOR, Courses.courseFor(ctx, "Falador (50, P2P)"))
     }
+
+    @Test
+    fun `auto stays on the current course while on a roof after a level-up`() {
+        // Level 20 unlocks Al Kharid mid-lap on the Draynor roof: Auto must finish Draynor first.
+        assertEquals(Course.DRAYNOR,
+            Courses.settle(Courses.BEST, Course.AL_KHARID, pinned = Course.DRAYNOR, onRoof = true))
+        // Back on the ground the switch goes through.
+        assertEquals(Course.AL_KHARID,
+            Courses.settle(Courses.BEST, Course.AL_KHARID, pinned = Course.DRAYNOR, onRoof = false))
+        // Nothing pinned yet (plugin just enabled): take the resolved course.
+        assertEquals(Course.AL_KHARID,
+            Courses.settle(Courses.BEST, Course.AL_KHARID, pinned = null, onRoof = true))
+    }
+
+    @Test
+    fun `a course chosen by name is never overridden by the roof pin`() {
+        assertEquals(Course.VARROCK,
+            Courses.settle(Course.VARROCK.label(), Course.VARROCK, pinned = Course.DRAYNOR, onRoof = true))
+    }
+
+    @Test
+    fun `the pyramid is never pinned`() {
+        assertEquals(Course.VARROCK,
+            Courses.settle(Courses.BEST, Course.VARROCK, pinned = Course.PYRAMID, onRoof = true))
+    }
 }
