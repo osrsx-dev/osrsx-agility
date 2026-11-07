@@ -77,6 +77,45 @@ object RooftopRoutes {
         step("Gap", 14897 to Tile(3510, 3483, 2)),
     )
 
+    /** Draynor Village rooftops (level 10) — 7 obstacles, from laps run live on deenart (2026-11-07). */
+    val DRAYNOR: List<RooftopStep> = listOf(
+        step("Rough wall", 11404 to Tile(3103, 3279, 0)),
+        step("Tightrope", 11405 to Tile(3098, 3277, 3)),
+        step("Tightrope", 11406 to Tile(3092, 3276, 3)),
+        step("Narrow wall", 11430 to Tile(3089, 3264, 3)),
+        step("Wall", 11630 to Tile(3088, 3256, 3)),
+        step("Gap", 11631 to Tile(3095, 3255, 3)),
+        step("Crate", 11632 to Tile(3102, 3261, 3)),
+    )
+
+    /**
+     * Al Kharid rooftops (level 20) — 8 obstacles, from laps run live on deenart (2026-11-07). The learned ring lost the
+     * Cable here and froze at 7, with every lap then substituting its way past the hole.
+     */
+    val AL_KHARID: List<RooftopStep> = listOf(
+        step("Rough wall", 11633 to Tile(3273, 3195, 0)),
+        step("Tightrope", 14398 to Tile(3272, 3181, 3)),
+        step("Cable", 14402 to Tile(3269, 3166, 3)),
+        step("Zip line", 14403 to Tile(3303, 3163, 3)),
+        step("Tropical tree", 14404 to Tile(3318, 3166, 1)),
+        step("Roof top beams", 11634 to Tile(3316, 3179, 2)),
+        step("Tightrope", 14409 to Tile(3313, 3186, 3)),
+        step("Gap", 14399 to Tile(3300, 3193, 3)),
+    )
+
+    /** Varrock rooftops (level 30) — 9 obstacles, from laps run live on deenart (2026-11-07). */
+    val VARROCK: List<RooftopStep> = listOf(
+        step("Rough wall", 14412 to Tile(3221, 3414, 0)),
+        step("Clothes line", 14413 to Tile(3213, 3414, 3)),
+        step("Gap", 14414 to Tile(3200, 3416, 3)),
+        step("Wall", 14832 to Tile(3191, 3415, 1)),
+        step("Gap", 14833 to Tile(3195, 3401, 3)),
+        step("Gap", 14834 to Tile(3209, 3399, 3)),
+        step("Gap", 14835 to Tile(3233, 3402, 3)),
+        step("Ledge", 14836 to Tile(3238, 3409, 3)),
+        step("Edge", 14841 to Tile(3238, 3416, 3)),
+    )
+
     /**
      * Every recorded route, keyed by course.
      *
@@ -86,6 +125,9 @@ object RooftopRoutes {
     val ALL: Map<Course, List<RooftopStep>> = mapOf(
         Course.FALADOR to FALADOR,
         Course.CANIFIS to CANIFIS,
+        Course.DRAYNOR to DRAYNOR,
+        Course.AL_KHARID to AL_KHARID,
+        Course.VARROCK to VARROCK,
     )
 
     private fun step(display: String, vararg options: Pair<Int, Tile>) =

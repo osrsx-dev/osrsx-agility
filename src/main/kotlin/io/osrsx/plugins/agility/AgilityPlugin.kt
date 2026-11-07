@@ -105,13 +105,10 @@ class AgilityPlugin : ScriptPlugin() {
             // is a singleton and a plugin stopped and started again keeps the same one, so without this the
             // second run inherits `done() == true` and never touches the camera — the failure that only a
             // client restart appeared to fix, because that is what clears the object.
-            onStart { stats.start(); pyramid.reset(); watchObstacles(); CameraFraming.reset() }
-            // A hand stop must hand the camera back too. onComplete already does, but it only fires on a met
-            // stop target — stopping the plugin yourself left the pitch relaxer (a persistent client flag) set.
-            onStop {
-                if (ctx.input().isLocked()) ctx.input().unlock()
-                CameraFraming.releaseCamera(ctx)
-                ctx.cameraControl().release()
+            onStart {
+                stats.start(); pyramid.reset(); watchObstacles(); CameraFraming.reset()
+                // The rooftop runner tells a finished lap from a fall by the game's lap-count line.
+                subscribe<io.osrsx.api.events.ChatMessage> { rooftops.onChat(it.message) }
             }
             substage("pyramid", { onPyramid() }, pyramid.staged)
             substage("rooftop", { true }, rooftops.staged)
@@ -119,6 +116,19 @@ class AgilityPlugin : ScriptPlugin() {
     }
 
     override fun script() = core.toScript()
+
+    /**
+     * Every stop ends here, a hand stop included. The staged script's `onStop` hook does not: it runs from the script's
+     * `finally`, and disabling the plugin drops the runner while the script is parked, so it never resumes to reach it. The
+     * walk to the course carried on clicking after a stop, and the pitch relaxer (a persistent client flag) stayed set
+     * (deenart 11-06).
+     */
+    override fun onScriptStop() {
+        if (ctx.walker().global.isNavigating()) ctx.walker().global.stop()
+        if (ctx.input().isLocked()) ctx.input().unlock()
+        CameraFraming.releaseCamera(ctx)
+        ctx.cameraControl().release()
+    }
 
     override fun onPanel(gfx: Gfx2D) = profile("agility/overlay") {
         val course = currentCourse()

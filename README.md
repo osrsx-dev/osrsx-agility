@@ -10,9 +10,9 @@ every obstacle in order, collecting what it drops, and keeping run energy topped
   **world membership** actually qualify for — Draynor (10), Al Kharid (20), Varrock (30), Agility Pyramid (30),
   Canifis (40), Falador (50), Seers' Village (60), Pollnivneach (70), Rellekka (80), Ardougne (90).
   `Auto` only ever picks a rooftop; the Pyramid is opt-in.
-- **Traverses the whole course on its own.** The obstacle sequence is **not** a hardcoded coordinate script —
-  the plugin recognises obstacles by their menu action (Climb, Cross, Leap, Balance, Hurdle, Vault,
-  Swing-across, Teeth-grip, Climb-up/down, …) and learns the course's order on its first lap (see below).
+- **Traverses the whole course on its own.** Draynor, Al Kharid, Varrock, Canifis and Falador follow a table of
+  obstacles recorded from the live game. The others recognise obstacles by their menu action (Climb, Cross, Leap,
+  Balance, Hurdle, Vault, Swing-across, Teeth-grip, Climb-up/down, …) and learn the order on the first lap (see below).
 - **Grabs Marks of Grace** as they spawn — but only ones on the roof it can actually reach, so it never
   fixates on a mark across a gap.
 - **Manages run energy** automatically, and can lock out physical input while running.
@@ -22,7 +22,11 @@ every obstacle in order, collecting what it drops, and keeping run energy topped
 
 ## How the course engine works
 
-Rather than script each obstacle by coordinate (brittle when Jagex nudges a tile), the plugin drives itself:
+A course with a recorded table (`RooftopRoutes`) follows it step by step and never substitutes another obstacle. If it
+finds itself out of step, say after a stray click or a restart on a roof, it carries on from the nearest obstacle in the
+table it can reach. An obstacle counts as done when it pays XP.
+
+A course without a table drives itself:
 
 - **Obstacle = the nearest scene object with an Agility action** (matched by whole-word verb tokens, so a
   tree's `Chop down` is never mistaken for `hop`). Ladders/staircases are excluded by name, so a course's own

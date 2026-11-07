@@ -307,7 +307,9 @@ class PyramidRunner(
         // through to [resync], which re-derives the index from the landing being stood on.
         if (idx == 0 && me.plane == 0 && !PyramidCourse.onPlateau(me)) {
             stats.status = "approaching pyramid"
-            return walkTo(PyramidCourse.START, ARRIVE_RADIUS)
+            // Ends on the PLATEAU, not at a radius — the same predicate that gates this branch, so the walk
+            // and the branch can never disagree about whether the approach is finished.
+            return walkTo(PyramidCourse.START, EXACT_TILE) { PyramidCourse.onPlateau(it) }
         }
 
         val obj = obstacleFor(step)
@@ -383,7 +385,7 @@ class PyramidRunner(
         stepSinceMs = 0L
         resyncs = 0
         stats.status = if (PyramidCourse.atBase(me)) "starting lap" else "recovering"
-        return walkTo(PyramidCourse.START, ARRIVE_RADIUS)
+        return walkTo(PyramidCourse.START, EXACT_TILE) { PyramidCourse.onPlateau(it) }
     }
 
     /** Dispose of the pyramid tops the laps have piled up, per the configured [TopsPolicy]. */
@@ -405,11 +407,15 @@ class PyramidRunner(
         // connect, and the stage re-enters forever. Same failure the START approach already guards against
         // ([PyramidCourse.onPlateau]) — the walk has to actually get off the plateau first.
         // Ground level and west of the rocks — the only place a Talk-to can actually connect.
-        val onHisSide = me != null && me.plane == PyramidCourse.SIMON_TILE.plane && !PyramidCourse.onPlateau(me)
+        val onHisSide = me != null && PyramidCourse.onSimonsSide(me)
         if (simon == null || simon.clickbox() == null || !onHisSide) {
             stats.status = "walking to Simon"
             if (simon != null) act("rotate") { ctx.camera().rotateToEntity(simon) }
-            return@section walkTo(PyramidCourse.SIMON_TILE, TALK_RADIUS)
+            // Side AND range, for the same reason the approach ends on the plateau: 3352,2827 is four tiles
+            // from Simon but still on the plateau, so a bare radius would call the crossing done too early.
+            return@section walkTo(PyramidCourse.SIMON_TILE, EXACT_TILE) {
+                PyramidCourse.atSimon(it, TALK_RADIUS)
+            }
         }
         stats.status = "selling tops"
         if (ctx.walker().global.isNavigating()) ctx.walker().global.stop()
@@ -433,18 +439,38 @@ class PyramidRunner(
     }
 
     /**
-     * Web-walk toward [dest], stopping [arriveRadius] tiles short. Fired once and then polled: the walker
-     * is self-driving, and re-calling `pathTo` every pass displaces the incumbent route and re-runs a whole
-     * global search per beat.
+     * Web-walk toward [dest], ending when [arrived] says we are there. Fired once and then polled: the
+     * walker is self-driving, and re-calling `pathTo` every pass displaces the incumbent route and re-runs
+     * a whole global search per beat.
+     *
+     * **[arriveRadius] is handed to the walker, not merely applied here.** A bare `pathTo(dest)` inherits
+     * the walker's AMBIENT tolerance, which is a client-wide setting (`Arrive radius`, 0..15) that the user
+     * or any other plugin can change — so the runner and the walker were answering "are we there yet?" with
+     * two different numbers. With the client set to 12 while this runner asked for 4, every walk whose
+     * remaining distance fell in the 5..12 band deadlocked: the walker declared `arrived` and refused to
+     * plan, the runner disagreed and re-asked forever. That is precisely what stranded the run beside
+     * [PyramidCourse.SIMON] after a sale, six tiles from the pyramid, reporting "approaching pyramid"
+     * indefinitely. Telling the walker the tolerance we actually mean keeps the two answers identical.
+     *
+     * [arrived] replaces that radius test on the legs where straight-line distance is a LIE. The
+     * `Climbing rocks` are a transport, so tiles a few squares apart can be a whole crossing apart, and the
+     * two legs that cross them finish on a SIDE rather than at a radius. Those legs pass [EXACT_TILE] so the
+     * walker cannot settle short on the wrong side and put the two tests back into disagreement.
      */
-    private suspend fun ScriptScope.walkTo(dest: Tile, arriveRadius: Int): Long =
+    private suspend fun ScriptScope.walkTo(
+        dest: Tile,
+        arriveRadius: Int,
+        arrived: (Tile) -> Boolean = { it.plane == dest.plane && it.distanceTo(dest) <= arriveRadius },
+    ): Long =
         ctx.profiler().section("pyramid/walk") {
             val me = ctx.players().localPlayer()?.tile()
-            if (me != null && me.plane == dest.plane && me.distanceTo(dest) <= arriveRadius) {
+            if (me != null && arrived(me)) {
                 if (ctx.walker().global.isNavigating()) ctx.walker().global.stop()
                 return@section snap(300, 700)
             }
-            if (!ctx.walker().global.isNavigating()) act("path-to") { ctx.walker().global.pathTo(dest) }
+            if (!ctx.walker().global.isNavigating()) {
+                act("path-to") { ctx.walker().global.pathTo(dest, arriveRadius) }
+            }
             // Poll on a short interval (the standalone walker's ~150ms cadence) rather than a long loop
             // delay — otherwise travel is noticeably slower than a plain web-walk.
             snap(120, 320)
@@ -474,9 +500,15 @@ class PyramidRunner(
          *  from the next one, and an off-screen pick is walked toward rather than abandoned. */
         const val OBSTACLE_RADIUS = 25
 
-        /** Stop web-walking to the course this close to the start — the start tile IS the first obstacle's
-         *  own tile, the no-op position from which `Climb-up` does nothing. */
-        const val ARRIVE_RADIUS = 4
+        /**
+         * The tolerance given to the walker on the two legs that cross the `Climbing rocks`: none.
+         *
+         * Those legs decide they are finished from which SIDE of the rocks the player is on (see [walkTo]),
+         * and any slack handed to the walker is slack it may use to stop on the wrong one — after which its
+         * "arrived" and the runner's "not there" disagree forever. Zero costs nothing here, because the
+         * side predicate always ends the walk first.
+         */
+        const val EXACT_TILE = 0
 
         /** Close enough to Simon that a Talk-to will connect. */
         const val TALK_RADIUS = 4

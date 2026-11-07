@@ -18,7 +18,13 @@ class CoursesTest {
         val ctx = TestContext()
         whenever(ctx.worlds.current()).thenReturn(301)
         whenever(ctx.worlds.list())
-            .thenReturn(listOf(WorldInfo(301, 100, 0, members, false, false, emptySet())))
+            // Named args past `location`: the SDK inserted `regionName` before `members`, so positional
+            // arguments silently bound the membership flag to a String parameter and stopped compiling.
+            .thenReturn(
+                listOf(
+                    WorldInfo(301, 100, 0, members = members, pvp = false, highRisk = false, types = emptySet()),
+                ),
+            )
         whenever(ctx.skills.real(Skill.AGILITY)).thenReturn(agility)
         return ctx
     }

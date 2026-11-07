@@ -34,9 +34,10 @@ enum class Course(
     val start: Tile,
     val style: CourseStyle = CourseStyle.ROOFTOP,
 ) {
-    // F2P rooftops.
-    DRAYNOR("Draynor", "Draynor Village", 10, members = false, start = Tile(3103, 3279, 0)),
-    AL_KHARID("AlKharid", "Al Kharid", 20, members = false, start = Tile(3273, 3195, 0)),
+    // F2P rooftops. A start is ground beside the first obstacle, not the obstacle's own tile: the walker's last click on that
+    // tile lands on the obstacle and climbs it (deenart 11-07, Draynor).
+    DRAYNOR("Draynor", "Draynor Village", 10, members = false, start = Tile(3105, 3279, 0)),
+    AL_KHARID("AlKharid", "Al Kharid", 20, members = false, start = Tile(3273, 3197, 0)),
     VARROCK("Varrock", "Varrock", 30, members = false, start = Tile(3221, 3417, 0)),
 
     // The one non-rooftop course: a fixed climb to the summit, worth ~1k XP and 10k coins per lap.

@@ -2,6 +2,7 @@ package io.osrsx.plugins.agility
 
 import io.osrsx.api.scene.GroundItem
 import io.osrsx.api.PluginContext
+import io.osrsx.api.player.Skill
 import io.osrsx.api.scene.SceneObject
 import io.osrsx.api.scene.Tile
 import io.osrsx.api.platform.section
@@ -107,6 +108,30 @@ class CourseRunner(
     private var interacted = false
     private var sawBusy = false
     private var clickMs = 0L
+
+    /**
+     * Agility XP at the moment the committed obstacle was clicked. Every rooftop obstacle pays XP, so a
+     * busy→idle cycle that paid nothing was NOT a traversal — it was a missed click that landed as `Walk here`
+     * (seen live on Pollnivneach while the camera was being re-framed). Counting that walk as the obstacle
+     * marked the Gap done, the runner then tried the obstacles across it ("I can't reach that!"), and the stuck
+     * watchdog finally handed a rooftop position to the web walker.
+     */
+    private var clickXp = -1
+
+    /** Clicks on the committed obstacle that moved us but paid nothing — capped by [MAX_MISSES]. */
+    private var misses = 0
+
+    /**
+     * The last obstacle paid and the next has not been clicked. Nothing can be mid-traversal then, so there are no idle dips
+     * to debounce: the wait is for the character itself, not for [Config.idleDebounce] on top of it.
+     */
+    private var betweenObstacles = false
+
+    // ---- lap detection: the ground landing is classified once the lap message has had a chance to arrive ----
+    /** When the player last came down to the ground from the roofs, while it is not yet known to be a lap or a fall. */
+    private var landedAtMs = 0L
+    /** The game has said "Your … lap count is: N." since the last lap was booked. */
+    @Volatile private var lapMessage = false
     private val cooldown = HashMap<Tile, Long>()
 
     // ---- stuck watchdog: no movement for too long anywhere is treated as a fall (restart the lap) ----
@@ -167,7 +192,7 @@ class CourseRunner(
         if (c?.id != courseId) resetFor(c)
 
         val me = ctx.players().localPlayer()?.tile()
-        val busy = gate.stillBusy(Config.idleDebounce.toLong())
+        val busy = gate.stillBusy(if (betweenObstacles) 0L else Config.idleDebounce.toLong())
         updateLap(me, c)
         checkStuck(me)
 
@@ -180,56 +205,125 @@ class CourseRunner(
         courseId = c?.id
         ring.clear(); lapVisited.clear(); cooldown.clear()
         learning = true; idx = 0; prev = null; prev2 = null; elevated = false; recovering = false
-        committed = null; interacted = false; sawBusy = false
+        committed = null; interacted = false; sawBusy = false; clickXp = -1; betweenObstacles = false
         lastPos = null; lastProgressMs = 0L
         lastLanding = null; prevLanding = null
+        landedAtMs = 0L; lapMessage = false
     }
+
+    /** Fed every game message by the plugin. The lap-count line is the only one that matters here. */
+    fun onChat(message: String) {
+        if (message.contains(LAP_MESSAGE, ignoreCase = true)) lapMessage = true
+    }
+
+    private fun agilityXp(): Int = ctx.skills().experience(Skill.AGILITY)
 
     /**
      * Plane-based lap / fall detection. A rooftop lap takes the player up (plane > 0) and drops them back to the
-     * ground *beside the start*; failing an obstacle instead drops them to the ground *far from the start*, at any
-     * point in the course. So a ground landing near the start is a completed lap, and a ground landing far from it
-     * is a fall — abandon progress and route back to the start ([onFall]).
+     * ground; failing an obstacle also drops them to the ground, at any point in the course. The two are told
+     * apart by the game's own "lap count is" message, with a ground landing beside the start also counting as a
+     * lap (the old rule, still right for the courses that end where they begin).
+     *
+     * Distance alone is NOT enough: Pollnivneach, Seers', Rellekka and Ardougne all end 30+ tiles from their
+     * start, so every finished lap there read as a fall — the ring was wiped and re-learned on every lap and
+     * never froze. A landing is therefore held as pending for [LAP_MSG_GRACE_MS], because the message and the
+     * landing arrive on the same tick and either may be seen first.
+     *
+     * The message needs no timing of its own. Comparing it with the landing's time misjudged laps, because that is when this
+     * read saw the landing, not when it happened: a think-pause across it aged the message out and the lap read as a fall
+     * (3 laps on Draynor counted as 2, deenart 11-07).
      */
     private fun updateLap(me: Tile?, c: Course?) {
         if (me == null || c == null) return
-        if (me.plane > 0) { elevated = true; return }
-        if (!elevated) return // already on the ground (walking to the course, recovering, …)
-        elevated = false
-        if (me.distanceTo(c.start) <= LAP_RADIUS) {
-            idx = 0
-            if (learning && ring.size >= MIN_RING) {
+        val now = System.currentTimeMillis()
+        if (me.plane > 0) { elevated = true; landedAtMs = 0L; return }
+        if (elevated) { elevated = false; landedAtMs = now }
+        if (landedAtMs == 0L) return // already on the ground (walking to the course, recovering, …)
+        when {
+            lapMessage || me.distanceTo(c.start) <= LAP_RADIUS -> {
+                landedAtMs = 0L; lapMessage = false
+                completeLap(c, me)
+            }
+            now - landedAtMs > LAP_MSG_GRACE_MS -> {
+                log.i("came down at ${me.x},${me.y} with no lap message - a fall, back to the start")
+                landedAtMs = 0L; onFall()
+            }
+        }
+    }
+
+    private fun completeLap(c: Course, me: Tile) {
+        idx = 0
+        // The lap's last obstacle is usually still committed here — its landing and the lap message arrive
+        // before the runner's next pass books it. Book it NOW, while the lap is still open, so it is part of
+        // the ring (left out, the frozen ring ended one short and every lap substituted its way to the finish).
+        committed?.let { last ->
+            if (clickXp >= 0 && agilityXp() > clickXp) recordProgress(last)
+        }
+        if (learning && RooftopRoutes.of(c) == null) {
+            // Only a ring learned from the course's own start is a whole lap. One learned from a run enabled
+            // part-way round holds just the tail of the course, and following it next lap left most of the
+            // obstacles unknown — so discard it and learn the next, complete lap instead.
+            val fromStart = ring.firstOrNull()?.let { it.distanceTo(c.start) <= LAP_RADIUS } == true
+            if (fromStart && ring.size >= MIN_RING) {
                 learning = false
                 // The ring IS the survey: dump it in traversal order so a per-course ordered table can be
                 // built from a real run rather than hand-guessed coordinates.
                 log.i("${c.id}: ring frozen (${ring.size}) ${ring.joinToString(" ") { "${it.x},${it.y},${it.plane}" }}")
+            } else {
+                log.i("${c.id}: partial lap (${ring.size} obstacles, not from the start) — relearning next lap")
+                ring.clear()
             }
-            stats.addLap()
-        } else {
-            onFall()
         }
+        lapVisited.clear()
+        prev = null; prev2 = null
+        // Booked above if it paid. Booking it after the clear instead put it straight back into lapVisited, so
+        // the next lap thought it was already done and stood in front of it (seen live: the Pollnivneach
+        // drying line). The lap is over; drop the commitment.
+        committed = null; interacted = false; sawBusy = false; clickXp = -1; betweenObstacles = false
+        stats.addLap()
+        // A course that ends away from its start (Pollnivneach, Seers', Rellekka, Ardougne) leaves us on the
+        // ground with no course obstacle in reach — only scenery that happens to carry a climb/jump verb.
+        // Walk back to the start first, exactly as after a fall, but without forgetting the ring.
+        if (me.distanceTo(c.start) > LAP_RADIUS) recovering = true
     }
 
     /**
      * Watchdog: if the player hasn't moved for [STUCK_RECOVER_MS] we're wedged (a junction with no doable
-     * obstacle, an unexpected object, a bad landing). Treat it like a fall — restart the lap from the start —
-     * so no single unhandled spot can hang the bot indefinitely.
+     * obstacle, an unexpected object, a bad landing).
+     *
+     * On the ground that is treated like a fall — restart the lap from the start. On a ROOF it must not be:
+     * the only way the web walker can leave a rooftop is a teleport, so "walk back to the start" from up there
+     * spun on minigame teleports forever. Up on the roof, forget every cooldown and the obstacle we were
+     * committed to and pick again — the next obstacle is always reachable from where a traversal left us.
      */
     private fun checkStuck(me: Tile?) {
         if (me == null) return
         val now = System.currentTimeMillis()
         if (me != lastPos) { lastPos = me; lastProgressMs = now; return }
         if (!recovering && lastProgressMs != 0L && now - lastProgressMs > STUCK_RECOVER_MS) {
-            onFall()
+            if (me.plane > 0) unstickOnRoof(me) else onFall()
             lastProgressMs = now
         }
+    }
+
+    private fun unstickOnRoof(me: Tile) {
+        log.i("stuck on the roof at ${me.x},${me.y},${me.plane} — clearing cooldowns and re-picking " +
+            "(committed=${committed?.tile?.let { "${it.x},${it.y}" } ?: "none"} idx=$idx/${ring.size} learning=$learning)")
+        cooldown.clear()
+        committed = null; interacted = false; sawBusy = false; clickXp = -1; betweenObstacles = false
+        // While learning, the pick skips everything already visited this lap — so one obstacle booked by
+        // mistake leaves nothing to pick, and clearing cooldowns alone changes nothing. Forget the lap's
+        // visits except the obstacle just taken, so the nearest one ahead is eligible again.
+        if (learning) lapVisited.retainAll(setOfNotNull(prev))
+        // A surveyed course has nothing to forget, but its step may be wrong for where we are.
+        RooftopRoutes.of(course())?.let { resync(it, obstaclesInScene(me), me) }
     }
 
     /** A fall dropped us off the course mid-lap: forget where we were and walk back to the start to restart. */
     private fun onFall() {
         recovering = true
         idx = 0; prev = null; prev2 = null
-        committed = null; interacted = false; sawBusy = false
+        committed = null; interacted = false; sawBusy = false; clickXp = -1; betweenObstacles = false
         lastLanding = null; prevLanding = null
         // A fall mid-learning leaves a partial, out-of-order ring — relearn it cleanly from the start.
         if (learning) { ring.clear(); lapVisited.clear() }
@@ -238,8 +332,29 @@ class CourseRunner(
     /** The main per-pass driver: perform the committed obstacle, or pick the next one. */
     private suspend fun ScriptScope.drive(me: Tile?, busy: Boolean): Long {
         if (me == null) return beatSnap()
-        // A busy period AFTER we clicked is the obstacle's walk-to + traversal animation.
-        if (busy) { if (interacted) sawBusy = true; stats.status = "traversing"; return beatSnap() }
+        // XP arrives as the character lands, so it is proof the obstacle is done, with nothing to wait out. Booking it only
+        // after the idle debounce and two pauses stood the character still for 3-4 s after every obstacle (Draynor, deenart
+        // 11-07), and an obstacle finished before a pass saw it busy was not booked at all and read as a no-op.
+        committed?.let { c ->
+            // From any click on it: a click judged missed can turn out to have landed, and the XP still says so.
+            if (clickXp >= 0 && agilityXp() > clickXp) {
+                completeObstacle(c, me)
+                betweenObstacles = true
+                return beatSnap()
+            }
+        }
+        // A busy period AFTER we clicked is the obstacle's walk-to + traversal animation. Looked at closely, only for the XP.
+        if (busy) {
+            // Really moving, not the debounce's tail. Counting that called a good click missed 0.7 s after it, and the Cable
+            // was clicked again from the far side until the watchdog stepped in (Al Kharid, deenart 11-07).
+            if (interacted && gate.isBusy()) sawBusy = true
+            stats.status = "traversing"
+            return if (interacted) snap(60, 120) else beatSnap()
+        }
+
+        // A fall always lands on the ground. Still being up on the roof means it was not one, and the web
+        // walker cannot route off a rooftop except by teleporting — so never hand it a rooftop position.
+        if (recovering && me.plane > 0) recovering = false
 
         // After a fall, walk all the way back to the start before touching any obstacle again.
         if (recovering) {
@@ -250,11 +365,16 @@ class CourseRunner(
 
         committed?.let { return driveCommitted(it, me) }
 
+        // On the ground a course begins at its start, and nothing else down here is ours. "The nearest obstacle in sight"
+        // ran Draynor's course with Al Kharid selected, for standing beside it (deenart 11-07).
+        val start = course()?.start
+        if (start != null && me.plane == 0 && (start.plane != 0 || me.distanceTo(start) > LAP_RADIUS)) return walkToCourse()
+
         val t = selectTarget(me)
         if (t == null) {
             return if (me.plane == 0) walkToCourse() else { stats.status = "waiting"; beatSnap() }
         }
-        committed = t; interacted = false; sawBusy = false
+        committed = t; interacted = false; sawBusy = false; misses = 0; clickXp = -1
         return snap(40, 90) // act on the new commitment next tick
     }
 
@@ -268,16 +388,27 @@ class CourseRunner(
         val now = System.currentTimeMillis()
         val obj = objAt(c.tile)
         if (obj == null) {
-            // Obstacle left the scene: if we'd already clicked it, we traversed past it → it's done.
-            if (interacted) completeObstacle(c, me) else committed = null
-            return@section beatSnap()
+            // Gone from the query because the traversal changed plane, usually, and its XP comes a tick after: give it time,
+            // or the booking is lost and the course is out of step after the zip line (deenart 11-07).
+            if (!interacted || now - clickMs > PAY_WAIT_MS) committed = null
+            return@section if (interacted) snap(60, 120) else beatSnap()
         }
 
         if (interacted) {
-            // We reach here only when NOT busy. A completed busy cycle means the traversal happened.
-            if (sawBusy) { completeObstacle(c, me); return@section beatSnap() }
+            // We reach here only when NOT busy, and [drive] has already booked it if it paid.
+            if (sawBusy) {
+                // Moved, but earned nothing: the click missed the obstacle and walked instead. Click it again.
+                log.i("no xp from ${c.action} at ${c.tile.x},${c.tile.y},${c.tile.plane} — the click missed (${misses + 1}/$MAX_MISSES)")
+                interacted = false; sawBusy = false
+                if (++misses >= MAX_MISSES) { cooldown[c.tile] = now + COOLDOWN_MS; committed = null }
+                return@section beatSnap()
+            }
             // Clicked but nothing ever moved → a no-op from the wrong side; cool it down and re-pick.
-            if (now - clickMs > STUCK_MS) { cooldown[c.tile] = now + COOLDOWN_MS; committed = null; return@section beatSnap() }
+            if (now - clickMs > STUCK_MS) {
+                log.i("nothing came of ${c.action} at ${c.tile.x},${c.tile.y},${c.tile.plane} from ${me.x},${me.y}")
+                cooldown[c.tile] = now + COOLDOWN_MS; committed = null
+                return@section beatSnap()
+            }
             return@section clickSnap() // just clicked; give it a beat to start
         }
 
@@ -285,11 +416,18 @@ class CourseRunner(
         // side and performs it (verified: it climbs the Rough wall from 5 tiles away). While it is off-screen,
         // rotate it into view, and local-walk toward it ONLY when it is also far — never step onto the
         // obstacle's own tile, which for a wall/beam is the no-op position where the action does nothing.
-        if (obj.clickbox() != null) {
+        if (obj.isClickable()) {
             stats.status = "traversing"
-            act("obstacle") { if (!obj.leftClickIfDefault(c.action)) obj.interact(c.action) }
-            interacted = true; clickMs = now; sawBusy = false
-            return@section clickSnap()
+            if (clickXp < 0) clickXp = agilityXp()
+            betweenObstacles = false
+            // Whether it landed is an answer to use. Assuming it did stood through 3.5 s of "did it start?" for a click that
+            // never happened, three times running with the Varrock gap under the HUD (deenart 11-07).
+            val landed = act("obstacle") { obj.leftClickIfDefault(c.action) || obj.interact(c.action) }
+            if (landed) {
+                interacted = true; clickMs = now; sawBusy = false
+                return@section clickSnap()
+            }
+            log.i("click on ${c.action} at ${c.tile.x},${c.tile.y},${c.tile.plane} did not land from ${me.x},${me.y} - framing it")
         }
         stats.status = "approaching"
         act("rotate") { ctx.camera().rotateToObject(obj) }
@@ -335,6 +473,8 @@ class CourseRunner(
 
     private suspend fun ScriptScope.grabMark(mark: GroundItem): Long = ctx.profiler().section("agility/mark") {
         stats.status = "grabbing mark"
+        // A walk to a mark does have dips in it, and a click in one would take the mark twice.
+        betweenObstacles = false
         if (act("take-mark") { mark.interact("Take") }) stats.addMark()
         beatSnap()
     }
@@ -350,7 +490,15 @@ class CourseRunner(
         stats.status = "walking"
         // Fire ONCE and poll: the walker is self-driving, and re-calling pathTo every pass displaces the
         // incumbent route and re-runs a whole global search per beat.
-        if (!ctx.walker().global.isNavigating()) act("path-to-course") { ctx.walker().global.pathTo(start) }
+        //
+        // Pass our OWN tolerance rather than letting it default. A bare pathTo(start) inherits the walker's
+        // ambient radius — a client-wide setting anyone can change — and whenever that is wider than
+        // ARRIVE_RADIUS the two disagree: the walker reports `arrived` while still outside it, this stays in
+        // the walk stage, and re-asking only gets the same instant `arrived` back. The run then stands still
+        // on the way to the course. (Measured on the pyramid, whose runner had the identical defect.)
+        if (!ctx.walker().global.isNavigating()) {
+            act("path-to-course") { ctx.walker().global.pathTo(start, ARRIVE_RADIUS) }
+        }
         // Poll the walker on a short interval (like the standalone walker's ~150ms cadence) rather than a long
         // loop delay — otherwise travel to the course is noticeably slower than a plain web-walk.
         snap(120, 320)
@@ -372,6 +520,9 @@ class CourseRunner(
         // COOLDOWN_MS doing nothing (a ~5s dead wait on top of the 3.5s it takes to notice). Re-clicking the
         // same obstacle is the correct response; the commit/STUCK_MS cycle already paces the retry.
         RooftopRoutes.of(course())?.let { route ->
+            // A step's obstacle is on the plane the last one lands on, so another plane means we are out of step: on a roof
+            // with the ground-level first step still to do, it would wait for ever (deenart 11-07, climbed by a stray click).
+            if (route[idx % route.size].options.none { it.tile.plane == me.plane }) resync(route, inScene, me)
             val step = route[idx % route.size]
             val here = inScene.filter { o -> step.options.any { it.tile == o.tile } }
             // Random among the options actually present: where a step genuinely offers two obstacles either
@@ -401,6 +552,20 @@ class CourseRunner(
                 ?: obstacles.filter { it.tile != prev }.minByOrNull { me.distanceTo(it.tile) }
                 ?: obstacles.minByOrNull { me.distanceTo(it.tile) }
         }
+    }
+
+    /**
+     * Find our place in a surveyed [route] from where we stand: the nearest of its obstacles we can get to, not counting the
+     * one just taken. Only for when the table cannot be right as it stands; the table decides otherwise.
+     */
+    private fun resync(route: List<RooftopStep>, inScene: List<Target>, me: Tile) {
+        val ours = inScene.filter { it.tile.plane == me.plane && it.tile != prev && RooftopRoutes.indexOf(route, it.tile) >= 0 }
+        val pick = ours.filter { ctx.terrain().canReachToInteract(it.tile) }.minByOrNull { me.distanceTo(it.tile) }
+            ?: ours.minByOrNull { me.distanceTo(it.tile) }
+            ?: return
+        val at = RooftopRoutes.indexOf(route, pick.tile)
+        log.i("out of step at ${me.x},${me.y},${me.plane} (step $idx) - carrying on from step $at, ${route[at].display}")
+        idx = at
     }
 
     /** The Agility obstacle object at [tile] — matched by tile, action AND name, so neither a co-located plain
@@ -471,6 +636,15 @@ class CourseRunner(
         /** How close to the start (ground) counts as completing a lap. */
         const val LAP_RADIUS = 8
 
+        /** The game's per-lap line, e.g. "Your Pollnivneach Rooftop lap count is: 8." */
+        const val LAP_MESSAGE = "lap count is"
+
+        /** Missed clicks on one obstacle before it is cooled down and something else is picked. */
+        const val MAX_MISSES = 3
+
+        /** How long a ground landing waits for [LAP_MESSAGE] before it is judged a fall. */
+        const val LAP_MSG_GRACE_MS = 2500L
+
         /** Stop web-walking to the course this close to the start (don't step onto the first obstacle's tile). */
         const val ARRIVE_RADIUS = 5
 
@@ -483,6 +657,9 @@ class CourseRunner(
 
         /** A clicked obstacle that never produces movement within this long is a no-op; skip it. */
         const val STUCK_MS = 3500L
+
+        /** How long a clicked obstacle that has left the scene may take to pay. A zip line is a long ride. */
+        const val PAY_WAIT_MS = 15_000L
 
         /** How long a no-op obstacle stays cooled-down before it can be tried again. */
         const val COOLDOWN_MS = 5000L

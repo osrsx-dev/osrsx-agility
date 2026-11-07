@@ -19,8 +19,20 @@ class PyramidCourseTest {
     @Test
     fun `route starts at the ground stairs and ends at the summit doorway`() {
         val first = PyramidCourse.ROUTE.first()
-        assertEquals(PyramidCourse.START, first.tile, "the first step must be the tile we web-walk to")
         assertEquals("Climb-up", first.action)
+        // We web-walk to a STANDABLE square at the foot of the stairs, never to the stairs' own tile: a
+        // blocked destination makes the global walker relax its goal to "the nearest reachable tile", which
+        // from the far side of the climbing rocks is wherever you already stand — it then reports arrival
+        // without moving. It must still be adjacent, so the opening Climb-up is one click away.
+        assertTrue(
+            PyramidCourse.START != first.tile,
+            "the walk-to tile must not be the stairs' own (blocked) tile",
+        )
+        assertTrue(
+            PyramidCourse.START.distanceTo(first.tile) <= 1,
+            "the walk-to tile must be adjacent to the first obstacle",
+        )
+        assertTrue(PyramidCourse.onPlateau(PyramidCourse.START), "the walk-to tile must be on the plateau")
 
         val last = PyramidCourse.ROUTE.last()
         assertEquals("Doorway", last.display)
@@ -176,6 +188,25 @@ class PyramidCourseTest {
         assertTrue(PyramidCourse.atBase(PyramidCourse.SIMON_TILE), "Simon stands at the base")
         assertTrue(!PyramidCourse.atBase(Tile(3355, 2833, 1)), "level 1 is not the base")
         assertTrue(!PyramidCourse.atBase(Tile(3041, 4695, 2)), "the upper pyramid is not the base")
+    }
+
+    @Test
+    fun `reaching Simon is decided by side of the rocks, not by distance alone`() {
+        // The deadlock this guards: 3352,2827 is only four tiles from Simon but sits on the PLATEAU, so a
+        // plain radius test calls the walk finished with the climbing rocks still to cross. The sale stage
+        // then refuses to talk (wrong side), re-issues the walk, is told it has already arrived, and the run
+        // stands there forever.
+        val plateauNearSimon = Tile(3352, 2827, 0)
+        assertTrue(
+            plateauNearSimon.distanceTo(PyramidCourse.SIMON_TILE) <= 4,
+            "precondition: this plateau tile really is within talking distance as the crow flies",
+        )
+        assertTrue(PyramidCourse.onPlateau(plateauNearSimon), "precondition: it is on the plateau")
+        assertTrue(!PyramidCourse.atSimon(plateauNearSimon, 4), "the plateau is never 'arrived at Simon'")
+
+        assertTrue(PyramidCourse.atSimon(PyramidCourse.SIMON_TILE, 4), "his own tile arrives")
+        assertTrue(PyramidCourse.atSimon(Tile(3348, 2827, 0), 4), "the rocks' western landing arrives")
+        assertTrue(!PyramidCourse.atSimon(Tile(3340, 2823, 0), 4), "out in the desert does not arrive")
     }
 
     @Test

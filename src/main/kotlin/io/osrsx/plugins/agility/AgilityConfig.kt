@@ -83,8 +83,9 @@ object Config : PluginSettings("agility") {
     // ---- Pacing: every forced wait between obstacles, tunable live (values in ms unless noted). ----
 
     var idleDebounce by intItem("idleDebounce", "Idle debounce (ms)", 1000, 100, 3000,
-        "How long the player must read continuously idle after a traversal before the next obstacle is " +
-            "engaged. Lower = snappier laps; too low re-clicks obstacles when the animation dips mid-cross.",
+        "How long the player must read continuously idle before the next action, when no XP has said the " +
+            "obstacle is done. An obstacle that paid XP does not wait for this. Too low re-clicks obstacles " +
+            "when the animation dips mid-cross.",
         section = "Pacing")
     var clickDelayMin by intItem("clickDelayMin", "Post-click delay min", 300, 0, 2000,
         "Shortest pause right after clicking an obstacle before checking whether the traversal started.",

@@ -33,7 +33,12 @@ fun StagedScriptBuilder<Unit>.agilityPrologue(
     holdDialogue: () -> Boolean = { false },
 ) {
     beforeEach {
-        if (!ctx.login().isLoggedIn()) CameraFraming.reset() // re-frame on the next session
+        if (!ctx.login().isLoggedIn()) {
+            CameraFraming.reset() // re-frame on the next session
+            // Never hold the input lock on the login screen: after the 6-hour session logout it kept the
+            // player from typing their own credentials, with nothing on screen saying why.
+            if (ctx.input().isLocked()) ctx.input().unlock()
+        }
         if (ctx.login().isLoggedIn()) {
             val want = lockInput()
             if (want && !ctx.input().isLocked()) ctx.input().lock()

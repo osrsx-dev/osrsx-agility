@@ -59,6 +59,41 @@ class RooftopRoutesTest {
         assertTrue(ids != ids.sorted(), "ids happen to be sorted — check this was recorded, not generated")
     }
 
+    @Test
+    fun `the first three courses are recorded, obstacle for obstacle`() {
+        assertEquals(
+            listOf("Rough wall", "Tightrope", "Tightrope", "Narrow wall", "Wall", "Gap", "Crate"),
+            RooftopRoutes.DRAYNOR.map { it.display },
+        )
+        // The Cable is the one the learned ring lost.
+        assertEquals(
+            listOf("Rough wall", "Tightrope", "Cable", "Zip line", "Tropical tree", "Roof top beams", "Tightrope", "Gap"),
+            RooftopRoutes.AL_KHARID.map { it.display },
+        )
+        assertEquals(9, RooftopRoutes.VARROCK.size)
+        assertEquals(RooftopRoutes.DRAYNOR, RooftopRoutes.of(Course.DRAYNOR))
+        assertEquals(RooftopRoutes.AL_KHARID, RooftopRoutes.of(Course.AL_KHARID))
+        assertEquals(RooftopRoutes.VARROCK, RooftopRoutes.of(Course.VARROCK))
+    }
+
+    /** A start on the obstacle's own tile gets the obstacle climbed by the walker's last click. */
+    @Test
+    fun `the first three courses walk to ground beside their first obstacle`() {
+        listOf(Course.DRAYNOR, Course.AL_KHARID, Course.VARROCK).forEach { c ->
+            val first = RooftopRoutes.of(c)!!.first().options.single().tile
+            assertTrue(c.start != first, "$c walks onto its first obstacle")
+        }
+    }
+
+    /** Each table starts where the plugin walks to, or it would arrive and find nothing to click. */
+    @Test
+    fun `every route starts within reach of its course's walk-to tile`() {
+        RooftopRoutes.ALL.forEach { (course, route) ->
+            val first = route.first().options.single().tile
+            assertTrue(first.distanceTo(course.start) <= 8, "$course: first obstacle $first is far from ${course.start}")
+        }
+    }
+
     /**
      * No tile may appear in two steps.
      *
@@ -90,7 +125,7 @@ class RooftopRoutesTest {
     /** An unrecorded course must fall through to the learned ring rather than half-follow a table. */
     @Test
     fun `courses without a survey have no route`() {
-        assertNull(RooftopRoutes.of(Course.DRAYNOR))
+        assertNull(RooftopRoutes.of(Course.ARDOUGNE))
         assertTrue(RooftopRoutes.of(Course.CANIFIS) != null)
         assertNull(RooftopRoutes.of(null))
         assertTrue(RooftopRoutes.of(Course.FALADOR) != null)

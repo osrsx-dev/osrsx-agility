@@ -75,8 +75,21 @@ data class PyramidStep(
  */
 object PyramidCourse {
 
-    /** The tile the plugin web-walks to: the ground-level `Stairs` that start the course. */
-    val START: Tile = Tile(3354, 2831, 0)
+    /**
+     * The tile the plugin web-walks to: the standable square at the foot of the ground-level `Stairs`.
+     *
+     * Deliberately NOT the stairs' own tile (3354,2831), which is what this used to be and which collision
+     * reports as blocked. A blocked destination sends the global walker down its *goal-relax* path — it
+     * routes to the nearest reachable standable tile near the goal and counts standing there as arrival —
+     * and that reachability is computed WITHOUT transports. From the far side of the `Climbing rocks`, which
+     * is exactly where the walk back from [SIMON] ends, the nearest reachable tile to the stairs is the one
+     * the player is already standing on: the walker answered `arrived` six tiles short, refused to plan a
+     * route, and the runner asked for one forever. Measured live at 3348,2826 after a sale.
+     *
+     * A standable destination skips that path entirely, so the rocks actually get crossed. It stays adjacent
+     * to the stairs, so the opening `Climb-up` is still one click away.
+     */
+    val START: Tile = Tile(3354, 2830, 0)
 
     /** The item a completed lap awards, and what [TopsPolicy] disposes of. */
     const val TOP_ITEM = "Pyramid top"
@@ -264,6 +277,21 @@ object PyramidCourse {
      * [BASE_REGION] and `atBase` already reads true out in the desert.
      */
     fun onPlateau(me: Tile): Boolean = atBase(me) && me.x >= PLATEAU_X
+
+    /**
+     * True when [me] stands on [SIMON]'s side of the `Climbing rocks` — ground level, west of the plateau.
+     * The only side from which a `Talk-to` on him can connect.
+     */
+    fun onSimonsSide(me: Tile): Boolean = me.plane == SIMON_TILE.plane && !onPlateau(me)
+
+    /**
+     * True when the walk to [SIMON] is genuinely finished: on [onSimonsSide] *and* within [radius] tiles.
+     *
+     * Both halves are load-bearing, because the rocks make straight-line distance a lie. 3352,2827 sits on
+     * the PLATEAU and is still only four tiles from him, so a plain radius test calls that arrival while a
+     * whole transport crossing remains — which is how the sale trip wedges.
+     */
+    fun atSimon(me: Tile, radius: Int): Boolean = onSimonsSide(me) && me.distanceTo(SIMON_TILE) <= radius
 
     // ---- desert support: a pyramid run is bounded by water, not by Agility ----
 
