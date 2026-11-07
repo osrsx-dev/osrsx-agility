@@ -77,7 +77,7 @@ object RooftopRoutes {
         step("Gap", 14897 to Tile(3510, 3483, 2)),
     )
 
-    /** Draynor Village rooftops (level 10) — 7 obstacles, from laps run live on deenart (2026-11-07). */
+    /** Draynor Village rooftops (level 1) — 7 obstacles, from laps run live on deenart (2026-11-07). */
     val DRAYNOR: List<RooftopStep> = listOf(
         step("Rough wall", 11404 to Tile(3103, 3279, 0)),
         step("Tightrope", 11405 to Tile(3098, 3277, 3)),

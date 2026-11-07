@@ -7,7 +7,7 @@ every obstacle in order, collecting what it drops, and keeping run energy topped
 ## What it does
 
 - **Pick a course** (or `Auto — best for level`). The dropdown only lists courses your **Agility level** and
-  **world membership** actually qualify for — Draynor (10), Al Kharid (20), Varrock (30), Agility Pyramid (30),
+  **world membership** actually qualify for — Draynor (1), Al Kharid (20), Varrock (30), Agility Pyramid (30),
   Canifis (40), Falador (50), Seers' Village (60), Pollnivneach (70), Rellekka (80), Ardougne (90).
   `Auto` only ever picks a rooftop; the Pyramid is opt-in.
 - **Traverses the whole course on its own.** Draynor, Al Kharid, Varrock, Canifis and Falador follow a table of

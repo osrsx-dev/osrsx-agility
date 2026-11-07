@@ -36,7 +36,8 @@ enum class Course(
 ) {
     // F2P rooftops. A start is ground beside the first obstacle, not the obstacle's own tile: the walker's last click on that
     // tile lands on the obstacle and climbs it (deenart 11-07, Draynor).
-    DRAYNOR("Draynor", "Draynor Village", 10, members = false, start = Tile(3105, 3279, 0)),
+    // Level 1 since the game removed its requirement on 8 May 2024; at 10 a new account had no course at all.
+    DRAYNOR("Draynor", "Draynor Village", 1, members = false, start = Tile(3105, 3279, 0)),
     AL_KHARID("AlKharid", "Al Kharid", 20, members = false, start = Tile(3273, 3197, 0)),
     VARROCK("Varrock", "Varrock", 30, members = false, start = Tile(3221, 3417, 0)),
 
@@ -88,8 +89,13 @@ object Courses {
     fun optionsFor(ctx: PluginContext): List<String> =
         listOf(BEST) + eligibleCourses(ctx).map { it.label() }
 
-    /** The course whose [Course.label] equals the stored config value, or null if none matches. */
-    fun byLabel(label: String): Course? = Course.entries.firstOrNull { it.label() == label }
+    /**
+     * The course a stored config value names, or null if none. By display name as well as by the whole label, because a
+     * label carries the level: "Draynor Village (10)", saved before the level changed, would otherwise fall through to
+     * [resolveBest] and run the account's highest course instead.
+     */
+    fun byLabel(label: String): Course? =
+        Course.entries.firstOrNull { it.label() == label } ?: Course.entries.firstOrNull { it.display == label.substringBefore(" (") }
 
     /**
      * The highest-level ROOFTOP course the account currently qualifies for, or null if it qualifies for

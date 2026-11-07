@@ -8,7 +8,6 @@ import org.mockito.kotlin.whenever
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class CoursesTest {
@@ -38,6 +37,19 @@ class CoursesTest {
     }
 
     @Test
+    fun `a brand new account has a course`() {
+        val fresh = ctx(members = true, agility = 1)
+        assertEquals(Course.DRAYNOR, Courses.resolveBest(fresh))
+        assertEquals(listOf(Courses.BEST, "Draynor Village (1)"), Courses.optionsFor(fresh))
+    }
+
+    @Test
+    fun `a course saved under its old level is still that course`() {
+        assertEquals(Course.DRAYNOR, Courses.byLabel("Draynor Village (10)"))
+        assertEquals(Course.DRAYNOR, Courses.courseFor(ctx(members = true, agility = 74), "Draynor Village (10)"))
+    }
+
+    @Test
     fun `courses are catalogued in ascending level order`() {
         val levels = Course.entries.map { it.level }
         assertEquals(levels.sorted(), levels, "courses should be ordered by level")
@@ -47,7 +59,7 @@ class CoursesTest {
     fun `f2p low-level account sees only the courses it qualifies for`() {
         val options = Courses.optionsFor(ctx(members = false, agility = 30))
         assertEquals(Courses.BEST, options.first(), "BEST is always the first option")
-        assertTrue(options.any { it.startsWith("Draynor") }, "level 10 F2P course should show")
+        assertTrue(options.any { it.startsWith("Draynor") }, "level 1 F2P course should show")
         assertTrue(options.any { it.startsWith("Varrock") }, "level 30 F2P course should show")
         assertFalse(options.any { it.startsWith("Canifis") }, "members course should be hidden on F2P")
         assertFalse(options.any { it.startsWith("Seers") }, "level 60 course hidden at agility 30")
@@ -63,7 +75,7 @@ class CoursesTest {
     fun `resolveBest picks the highest qualifying course`() {
         assertEquals(Course.VARROCK, Courses.resolveBest(ctx(members = false, agility = 35)))
         assertEquals(Course.SEERS, Courses.resolveBest(ctx(members = true, agility = 60)))
-        assertNull(Courses.resolveBest(ctx(members = false, agility = 5)), "no F2P course below level 10")
+        assertEquals(Course.DRAYNOR, Courses.resolveBest(ctx(members = false, agility = 5)))
     }
 
     @Test
